@@ -1,0 +1,1881 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Charactersmith — 2D Character Prototype</title>
+<style>
+  :root{
+    --chrome:#23201e;
+    --chrome-2:#2e2a27;
+    --chrome-3:#3b3633;
+    --ink:#efe9e0;
+    --muted:#a49a8f;
+    --accent:#6ea8ff;
+    --paper:#F7F4EE;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%;margin:0}
+  body{
+    font:13px/1.4 "Segoe UI",system-ui,-apple-system,sans-serif;
+    background:var(--chrome);color:var(--ink);
+    display:flex;overflow:hidden;user-select:none;-webkit-user-select:none;
+  }
+
+  /* ---------- left toolbar ---------- */
+  #toolbar{
+    width:74px;flex:0 0 74px;background:var(--chrome-2);
+    border-right:1px solid #171513;
+    display:flex;flex-direction:column;align-items:center;gap:10px;padding:14px 0;
+  }
+  #toolbar .logo{font-size:10px;letter-spacing:.14em;color:var(--muted);text-align:center;margin-bottom:4px}
+  .tool{
+    width:52px;height:52px;border-radius:12px;border:1px solid transparent;
+    background:var(--chrome-3);color:var(--ink);cursor:pointer;
+    display:flex;align-items:center;justify-content:center;position:relative;
+    transition:background .12s,border-color .12s,transform .08s;
+  }
+  .tool:hover{background:#4a4441}
+  .tool:active{transform:scale(.95)}
+  .tool.active{background:#514a45;border-color:var(--accent);box-shadow:0 0 0 2px rgba(110,168,255,.22)}
+  .tool svg{width:26px;height:26px;stroke:currentColor;fill:none;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
+  .tool .kbd{position:absolute;right:4px;bottom:2px;font-size:9px;color:var(--muted)}
+  .tip{
+    position:absolute;left:62px;white-space:nowrap;background:#111;color:#fff;
+    padding:5px 9px;border-radius:6px;font-size:11px;opacity:0;pointer-events:none;
+    transition:opacity .12s;z-index:50;
+  }
+  .tool:hover .tip{opacity:.96}
+  .sep{width:36px;height:1px;background:#4a4441;margin:4px 0}
+
+  /* ---------- stage ---------- */
+  #stage{flex:1;position:relative;min-width:0;overflow:hidden}
+  canvas{display:block;position:absolute;inset:0;touch-action:none}
+  #topbar{
+    position:absolute;top:12px;left:50%;transform:translateX(-50%);
+    display:flex;gap:6px;align-items:center;z-index:10;
+    background:rgba(35,32,30,.86);backdrop-filter:blur(6px);
+    border:1px solid #171513;border-radius:11px;padding:6px;
+  }
+  .seg{display:flex;background:#191716;border-radius:8px;padding:2px}
+  .seg button{
+    border:0;background:transparent;color:var(--muted);padding:6px 16px;
+    border-radius:6px;cursor:pointer;font:inherit;font-weight:600;letter-spacing:.03em;
+    position:relative;
+  }
+  .seg button .kbd{position:absolute;right:4px;bottom:1px;font-size:9px;font-weight:400;
+    letter-spacing:0;color:var(--muted);opacity:.75;line-height:1}
+  .seg button.on{background:var(--chrome-3);color:var(--ink)}
+  .btn{
+    border:1px solid #4a4441;background:var(--chrome-3);color:var(--ink);
+    padding:6px 11px;border-radius:8px;cursor:pointer;font:inherit;white-space:nowrap;
+  }
+  .btn:not(:disabled):hover{background:#4a4441}
+  .btn:disabled{opacity:.35;cursor:default}
+  .chk{display:flex;align-items:center;gap:6px;color:var(--muted);padding:0 8px;cursor:pointer}
+
+  /* ---------- right palette ---------- */
+  #palette{
+    width:300px;flex:0 0 300px;background:var(--chrome-2);border-left:1px solid #171513;
+    position:relative;z-index:5;
+    padding:14px 12px;display:flex;flex-direction:column;gap:11px;overflow-y:auto;
+  }
+  #palette h3{margin:0;font-size:11px;letter-spacing:.16em;color:var(--muted);text-transform:uppercase;font-weight:700}
+  .psec{display:flex;flex-direction:column;gap:6px}
+  .toolname{font-size:14px;font-weight:700;letter-spacing:.01em}
+  .hidden{display:none !important}
+  .prow{display:flex;gap:6px}
+  .pbtn{
+    flex:1;padding:7px 6px;border-radius:8px;border:1px solid #4a4441;
+    background:var(--chrome-3);color:var(--ink);font:inherit;cursor:pointer;
+    display:flex;align-items:center;justify-content:center;gap:6px;
+  }
+  .pbtn:hover:not(:disabled){background:#4a4441}
+  .pbtn:disabled{opacity:.32;cursor:default}
+  .pbtn svg{width:15px;height:15px;stroke:currentColor;fill:none;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
+  .slider{display:flex;align-items:center;gap:8px;font-size:11px;color:var(--muted)}
+  .slider input{flex:1;accent-color:var(--accent);min-width:0}
+  .slider .val{width:26px;text-align:right;font-family:ui-monospace,Consolas,monospace;color:var(--ink)}
+  .divider{height:1px;background:#3b3633}
+  .swatches{display:grid;grid-template-columns:repeat(9,1fr);gap:4px}
+  .sw{
+    aspect-ratio:1;border-radius:6px;cursor:grab;border:1px solid rgba(0,0,0,.35);
+    box-shadow:inset 0 1px 0 rgba(255,255,255,.25);
+  }
+  .sw:active{cursor:grabbing}
+  /* the "none" colour - a white chip with a red X. Dropped in a slot it turns
+     that part of the shape off entirely. */
+  .xnone{background:#fff !important;position:relative;overflow:hidden}
+  .xnone::before,.xnone::after{
+    content:'';position:absolute;left:8%;right:8%;top:calc(50% - 1px);height:2px;
+    background:#e0403a;border-radius:1px;
+  }
+  .xnone::before{transform:rotate(45deg)}
+  .xnone::after{transform:rotate(-45deg)}
+  .colhead{display:flex;align-items:center;gap:6px}
+  .colhead h3{flex:1;min-width:0}
+  .colhead h3.right{text-align:right}
+  .slotcols{display:flex;gap:6px}
+  .slots{display:flex;flex-direction:column;gap:5px;flex:1;min-width:0}
+  .slot{
+    display:flex;align-items:center;gap:9px;padding:6px;border-radius:9px;cursor:grab;
+    min-width:0;overflow:hidden;
+    background:#191716;border:1px dashed #4a4441;transition:border-color .12s,background .12s;
+  }
+  .slot.hot{border-color:var(--accent);background:#20262f}
+  .slot .chip{width:28px;height:28px;border-radius:7px;border:1px solid rgba(0,0,0,.4);flex:0 0 28px}
+  .slot .lbl{font-weight:700;font-size:12px}
+  .slot .hex{font-size:10.5px;color:var(--muted);font-family:ui-monospace,Consolas,monospace}
+  /* ---------- modal ---------- */
+  #modalWrap{
+    position:fixed;inset:0;z-index:200;display:flex;align-items:center;justify-content:center;
+    background:rgba(12,10,9,.55);backdrop-filter:blur(2px);
+  }
+  #modalCard{
+    width:340px;background:var(--chrome-2);border:1px solid #171513;border-radius:14px;
+    padding:16px;box-shadow:0 18px 50px rgba(0,0,0,.55);
+  }
+  #modalCard h2{margin:0 0 8px;font-size:15px;font-weight:700;letter-spacing:.01em}
+  #modalCard p{margin:0 0 14px;color:var(--muted);font-size:12px;line-height:1.5}
+  .mrow{display:flex;gap:7px}
+  .mrow .btn{flex:1;padding:8px 6px;font-weight:600}
+  .mrow .btn.primary{border-color:var(--accent);background:#31405c;color:#e7efff}
+  .mrow .btn.primary:hover{background:#3b4d70}
+  #ghost{
+    position:fixed;width:30px;height:30px;border-radius:8px;pointer-events:none;z-index:999;
+    border:2px solid #fff;box-shadow:0 4px 14px rgba(0,0,0,.5);transform:translate(-50%,-50%);display:none;
+  }
+</style>
+</head>
+<body>
+
+<div id="toolbar">
+  <div class="logo">TOOLS</div>
+
+  <button class="tool active" data-tool="brush">
+    <svg viewBox="0 0 24 24"><path d="M4 20c0-3 2-4 3.5-4.5"/><path d="M8.5 15.5c-2 .8-3 2.2-3.2 4.2 2.2-.2 3.6-1.2 4.4-3.2"/><path d="M9.7 16.5 7.5 14.3 16 5.8a1.6 1.6 0 0 1 2.2 0l.5.5a1.6 1.6 0 0 1 0 2.2Z"/></svg>
+    <span class="kbd">1</span><span class="tip">The Brush</span>
+  </button>
+
+  <button class="tool" data-tool="smear">
+    <svg viewBox="0 0 24 24"><path d="M4 17c3.2 0 4.2-3.4 7-3.4S16.6 17 20 17"/><path d="M6 12.2c2.4 0 3.2-2.4 5.2-2.4s2.9 2.4 5 2.4"/><path d="M8.5 7.6c1.6 0 2.1-1.6 3.5-1.6s1.9 1.6 3.4 1.6"/></svg>
+    <span class="kbd">2</span><span class="tip">The Smear</span>
+  </button>
+
+  <button class="tool" data-tool="eraser">
+    <svg viewBox="0 0 24 24"><path d="M14.5 4.5 20 10a1.7 1.7 0 0 1 0 2.4l-7 7H8l-3.6-3.6a1.7 1.7 0 0 1 0-2.4l7.7-7.7a1.7 1.7 0 0 1 2.4 0Z"/><path d="M9 19.4 15.6 13"/></svg>
+    <span class="kbd">3</span><span class="tip">The Eraser</span>
+  </button>
+
+  <button class="tool" data-tool="hand">
+    <svg viewBox="0 0 24 24"><path d="M9 11V5.6a1.4 1.4 0 0 1 2.8 0V11"/><path d="M11.8 10.6V4.4a1.4 1.4 0 0 1 2.8 0v6.2"/><path d="M14.6 11V6.6a1.4 1.4 0 0 1 2.8 0V14"/><path d="M9 11V9.2a1.4 1.4 0 0 0-2.8 0v6.1c0 3.2 2.4 5.7 5.7 5.7h1.2c3 0 4.3-2 4.3-5"/></svg>
+    <span class="kbd">4</span><span class="tip">Hand of Judgement</span>
+  </button>
+
+  <div class="sep"></div>
+
+  <button class="tool" id="btnDelete">
+    <svg viewBox="0 0 24 24"><path d="M4 7h16"/><path d="M9.5 7V5.4A1.4 1.4 0 0 1 10.9 4h2.2a1.4 1.4 0 0 1 1.4 1.4V7"/><path d="M6.5 7 7.4 19a1.5 1.5 0 0 0 1.5 1.4h6.2a1.5 1.5 0 0 0 1.5-1.4L17.5 7"/></svg>
+    <span class="tip">Delete selected shape (Del)</span>
+  </button>
+
+  <div class="sep"></div>
+
+  <button class="tool" id="btnExport">
+    <svg viewBox="0 0 24 24"><path d="M12 3.5v10.5"/><path d="M8.2 10.2 12 14l3.8-3.8"/><path d="M4.5 15.5V19a1.5 1.5 0 0 0 1.5 1.5h12a1.5 1.5 0 0 0 1.5-1.5v-3.5"/></svg>
+    <span class="tip">Export PNG</span>
+  </button>
+</div>
+
+<div id="stage">
+  <canvas id="cv"></canvas>
+  <div id="topbar">
+    <div class="seg" id="viewSeg">
+      <button data-view="front" class="on">Front<span class="kbd">Q</span></button>
+      <button data-view="back">Back<span class="kbd">Q</span></button>
+    </div>
+    <label class="chk"><input type="checkbox" id="onion" checked> onion</label>
+    <button class="btn" id="btnCopyView">Copy to Back</button>
+    <div class="seg" id="shadeSeg">
+      <button data-shade="gradient">Gradient</button>
+      <button data-shade="hatch" class="on">Hatch</button>
+    </div>
+    <button class="btn" id="btnUndo">Undo</button>
+    <button class="btn" id="btnRedo">Redo</button>
+  </div>
+</div>
+
+<div id="palette">
+  <div class="psec">
+    <h3>Tool</h3>
+    <div class="toolname" id="toolName">Brush</div>
+
+    <div class="psec toolopt" id="optBrush">
+      <div class="slider"><span>Outline</span><input type="range" id="optBrushW" min="1" max="12" step="0.5" value="4"><span class="val" id="optBrushWv">4</span></div>
+      <div class="slider"><span>Snap</span><input type="range" id="optSnap" min="4" max="30" value="13"><span class="val" id="optSnapv">13</span></div>
+    </div>
+
+    <div class="psec toolopt" id="optSmear">
+      <div class="slider"><span>Radius</span><input type="range" id="optSmearR" min="6" max="60" value="22"><span class="val" id="optSmearRv">22</span></div>
+    </div>
+
+    <div class="psec toolopt" id="optEraser">
+      <div class="slider"><span>Radius</span><input type="range" id="optEraserR" min="6" max="60" value="18"><span class="val" id="optEraserRv">18</span></div>
+    </div>
+
+    <div class="psec toolopt" id="optHand"></div>
+  </div>
+
+  <div class="divider" id="selDiv"></div>
+
+  <div class="psec" id="selSec">
+    <h3>Selected shape</h3>
+    <div class="prow">
+      <button class="pbtn" id="flipH"><svg viewBox="0 0 24 24"><path d="M12 3v18"/><path d="M9 7 4 12l5 5Z"/><path d="m15 7 5 5-5 5Z"/></svg>Flip H</button>
+      <button class="pbtn" id="flipV"><svg viewBox="0 0 24 24"><path d="M3 12h18"/><path d="M7 9 12 4l5 5Z"/><path d="m7 15 5 5 5-5Z"/></svg>Flip V</button>
+    </div>
+    <div class="prow">
+      <button class="pbtn" id="dupBtn"><svg viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a2 2 0 0 1 2-2h8"/></svg>Duplicate</button>
+      <button class="pbtn" id="delBtn"><svg viewBox="0 0 24 24"><path d="M4 7h16"/><path d="M6.5 7 7.4 19a1.5 1.5 0 0 0 1.5 1.4h6.2a1.5 1.5 0 0 0 1.5-1.4L17.5 7"/></svg>Delete</button>
+    </div>
+  </div>
+
+  <div class="divider"></div>
+
+  <h3>Colour Palette</h3>
+  <div class="swatches" id="swatches"></div>
+
+  <div class="colhead">
+    <h3>Colours</h3>
+    <h3 class="right hidden" id="selColHead">Selected</h3>
+  </div>
+  <div class="slotcols">
+    <div class="slots" id="slots">
+      <div class="slot" data-slot="outline" data-target="current"><div class="chip"></div><div><div class="lbl">Outline</div><div class="hex"></div></div></div>
+      <div class="slot" data-slot="fill" data-target="current"><div class="chip"></div><div><div class="lbl">Fill</div><div class="hex"></div></div></div>
+      <div class="slot" data-slot="shadow" data-target="current"><div class="chip"></div><div><div class="lbl">Shadow</div><div class="hex"></div></div></div>
+    </div>
+    <div class="slots hidden" id="selSlots">
+      <div class="slot" data-slot="outline" data-target="sel"><div class="chip"></div><div><div class="lbl">Outline</div><div class="hex"></div></div></div>
+      <div class="slot" data-slot="fill" data-target="sel"><div class="chip"></div><div><div class="lbl">Fill</div><div class="hex"></div></div></div>
+      <div class="slot" data-slot="shadow" data-target="sel"><div class="chip"></div><div><div class="lbl">Shadow</div><div class="hex"></div></div></div>
+    </div>
+  </div>
+</div>
+
+<div id="modalWrap" class="hidden">
+  <div id="modalCard">
+    <h2 id="modalTitle">Copy to Back</h2>
+    <p id="modalBody"></p>
+    <div class="mrow">
+      <button class="btn primary" id="mReplace">Replace</button>
+      <button class="btn" id="mAdd">Add</button>
+      <button class="btn" id="mCancel">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<div id="ghost"></div>
+
+<script>
+/* =========================================================================
+   Charactersmith prototype - everything client side, quality intentionally
+   "prototype grade". One file, no build step.
+   ========================================================================= */
+
+const cv   = document.getElementById('cv');
+const ctx  = cv.getContext('2d');
+const stage= document.getElementById('stage');
+
+/* ---------------------------------------------------------------- state */
+const views   = { front: [], back: [] };     // two character views
+let   view    = 'front';
+let   tool    = 'brush';
+let   selected= null;   // the anchor shape - gestures and the sidebar read this one
+let   extra   = [];     // the rest of a multi-selection (box drag / shift-click)
+let   onionOn = true;
+let   shading = 'hatch';      // 'gradient' | 'hatch'
+let   uid     = 1;
+
+// A slot holding NONE means "do not render this part at all".
+const NONE = 'none';
+const paint = c => c===NONE ? 'rgba(0,0,0,0)' : c;   // for gradient stops
+
+// persistent colour choice - new shapes inherit this
+let current = { outline:'#2E2A28', fill:'#F7C59F', shadow:'#B9713F' };
+
+/* The whole selection, anchor first. Every group operation goes through this. */
+const selGroup = () => selected ? [selected].concat(extra) : [];
+const inSel    = s => s===selected || extra.indexOf(s)>=0;
+function clearSel(){ selected=null; extra=[]; }
+function dropFromSel(s){
+  if(selected===s){ selected=extra.shift()||null; }
+  else { const i=extra.indexOf(s); if(i>=0) extra.splice(i,1); }
+}
+
+// transient interaction state
+let drawing = null;     // {pts:[]}
+let carve   = null;     // {shapes}
+let gesture = null;     // {mode, ...}
+let marquee = null;     // {x0,y0,x1,y1} - the drag box
+let mouse   = {x:-999,y:-999,down:false};
+
+let smearR  = 22;       // live, driven by the sidebar sliders
+let eraserR = 18;
+let brushW  = 4;
+const WARP_R   = 90;    // falloff radius (arc-length, local units) for point drag
+/* Snapping shut is judged against how much you have DRAWN, not a fixed
+   distance - a 34px gap was nothing on a small shape (everything closed) and
+   a hard target on a big one. The clamps stop it collapsing on scribbles or
+   running away on huge strokes. */
+let   closeFrac = 0.13;
+const CLOSE_MIN = 9;
+const CLOSE_MAX = 70;
+const MIN_RUN   = 16;   // below this the stroke is a dab, not a loop
+function closeThresholdFor(len){
+  return Math.max(CLOSE_MIN, Math.min(CLOSE_MAX, len*closeFrac));
+}
+function pathLength(pts){
+  let L=0; for(let i=1;i<pts.length;i++) L+=dist(pts[i-1],pts[i]);
+  return L;
+}
+
+/* ------------------------------------------------------------- geometry */
+const TAU = Math.PI*2;
+const dist = (a,b)=>Math.hypot(a.x-b.x, a.y-b.y);
+
+function toWorld(s,p){
+  const x=p.x*s.sx, y=p.y*s.sy, c=Math.cos(s.rot), n=Math.sin(s.rot);
+  return { x: s.x + x*c - y*n, y: s.y + x*n + y*c };
+}
+function toLocal(s,w){
+  const dx=w.x-s.x, dy=w.y-s.y, c=Math.cos(-s.rot), n=Math.sin(-s.rot);
+  return { x:(dx*c - dy*n)/s.sx, y:(dx*n + dy*c)/s.sy };
+}
+const worldPts = s => s.pts.map(p=>toWorld(s,p));
+
+function bbox(pts){
+  let a=1e9,b=1e9,c=-1e9,d=-1e9;
+  for(const p of pts){ if(p.x<a)a=p.x; if(p.y<b)b=p.y; if(p.x>c)c=p.x; if(p.y>d)d=p.y; }
+  return {x0:a,y0:b,x1:c,y1:d,w:c-a,h:d-b,cx:(a+c)/2,cy:(b+d)/2};
+}
+
+const mid=(a,b)=>({x:(a.x+b.x)/2,y:(a.y+b.y)/2});
+
+/* Smooth closed path through points (quadratics via segment midpoints).
+   This is the single biggest "makes a wobbly hand look competent" trick.
+   The FILL always uses this, closed or not - that is what lets an open
+   stroke still hold colour. */
+function buildPath(g,pts){
+  const n=pts.length;
+  g.beginPath();
+  if(n<3){ if(n) g.moveTo(pts[0].x,pts[0].y); for(let i=1;i<n;i++) g.lineTo(pts[i].x,pts[i].y); return; }
+  const m0=mid(pts[n-1],pts[0]);
+  g.moveTo(m0.x,m0.y);
+  for(let i=0;i<n;i++){
+    const p=pts[i], q=pts[(i+1)%n], m=mid(p,q);
+    g.quadraticCurveTo(p.x,p.y,m.x,m.y);
+  }
+  g.closePath();
+}
+
+/* The region a shape fills. For an open stroke the chord is a dead-straight
+   line between the two endpoints, so the bare edge really is flat and the
+   outline stops exactly on it instead of overshooting into whiskers. */
+function buildFill(g,pts,closed){
+  if(closed) buildPath(g,pts);
+  else { buildOpenPath(g,pts); g.closePath(); }
+}
+
+/* Same curve, but only across the part the user actually drew - the closing
+   chord is left bare so shapes can be layered against a clean edge. */
+function buildOpenPath(g,pts){
+  const n=pts.length;
+  g.beginPath();
+  if(n<3){ if(n) g.moveTo(pts[0].x,pts[0].y); for(let i=1;i<n;i++) g.lineTo(pts[i].x,pts[i].y); return; }
+  g.moveTo(pts[0].x,pts[0].y);
+  for(let i=1;i<n-1;i++){
+    const m=mid(pts[i],pts[i+1]);
+    g.quadraticCurveTo(pts[i].x,pts[i].y,m.x,m.y);
+  }
+  g.lineTo(pts[n-1].x,pts[n-1].y);
+}
+
+/* Ramer-Douglas-Peucker */
+function rdp(pts,eps){
+  if(pts.length<3) return pts.slice();
+  const keep=new Array(pts.length).fill(false);
+  keep[0]=keep[pts.length-1]=true;
+  (function rec(a,b){
+    let idx=-1,max=0;
+    const A=pts[a],B=pts[b], dx=B.x-A.x, dy=B.y-A.y, len=Math.hypot(dx,dy)||1;
+    for(let i=a+1;i<b;i++){
+      const d=Math.abs((pts[i].x-A.x)*dy-(pts[i].y-A.y)*dx)/len;
+      if(d>max){max=d;idx=i;}
+    }
+    if(max>eps && idx>0){ keep[idx]=true; rec(a,idx); rec(idx,b); }
+  })(0,pts.length-1);
+  return pts.filter((_,i)=>keep[i]);
+}
+
+/* Even spacing => predictable dots to drag and clean deformation.
+   Open shapes are resampled along the drawn run only, keeping both
+   endpoints exact - no points are invented along the closing chord. */
+function resample(pts,step,closed){
+  const n=pts.length; if(n<3) return pts.slice();
+  const out=[]; let carry=0;
+  const last = closed ? n : n-1;
+  for(let i=0;i<last;i++){
+    const a=pts[i], b=pts[(i+1)%n];
+    const seg=dist(a,b); if(seg<1e-6) continue;
+    let t=carry;
+    while(t<seg){ out.push({x:a.x+(b.x-a.x)*t/seg, y:a.y+(b.y-a.y)*t/seg}); t+=step; }
+    carry=t-seg;
+  }
+  if(!closed) out.push({x:pts[n-1].x, y:pts[n-1].y});
+  return out.length>=3?out:pts.slice();
+}
+
+function arcLengths(pts,closed){
+  const n=pts.length, s=new Array(n); let acc=0;
+  for(let i=0;i<n;i++){
+    s[i]=acc;
+    if(closed || i<n-1) acc+=dist(pts[i],pts[(i+1)%n]);
+  }
+  return {s,total:acc||1};
+}
+
+/* -------------------------------------------------------------- colours */
+function hex2rgb(h){
+  h=h.replace('#','');
+  if(h.length===3) h=h.split('').map(c=>c+c).join('');
+  return [parseInt(h.slice(0,2),16),parseInt(h.slice(2,4),16),parseInt(h.slice(4,6),16)];
+}
+const clamp255=v=>Math.max(0,Math.min(255,Math.round(v)));
+function shade(hex,amt){ // amt>0 lighten, amt<0 darken
+  const [r,g,b]=hex2rgb(hex);
+  const f=v=> amt>0 ? v+(255-v)*amt : v*(1+amt);
+  return 'rgb('+clamp255(f(r))+','+clamp255(f(g))+','+clamp255(f(b))+')';
+}
+
+/* ------------------------------------------------------------ rendering */
+let dpr=1;
+function resize(){
+  dpr = window.devicePixelRatio||1;
+  const r = stage.getBoundingClientRect();
+  cv.width = Math.round(r.width*dpr); cv.height = Math.round(r.height*dpr);
+  cv.style.width = r.width+'px';      cv.style.height = r.height+'px';
+  ctx.setTransform(dpr,0,0,dpr,0,0);
+}
+window.addEventListener('resize',resize);
+new ResizeObserver(resize).observe(stage);   // palette panel opening changes the stage width
+
+function drawBackground(w,h){
+  ctx.fillStyle='#F7F4EE'; ctx.fillRect(0,0,w,h);   // off white paper
+  const step=24;
+  ctx.fillStyle='#CFC7B8';                          // darker shade, not black
+  for(let y=step/2;y<h;y+=step)
+    for(let x=step/2;x<w;x+=step){
+      ctx.beginPath(); ctx.arc(x,y,1.15,0,TAU); ctx.fill();
+    }
+}
+
+/* The light axis, given as two corners of the shape's box in 0..1 fractions.
+   Lit corner -> dark corner. Change these two lines to re-aim the light. */
+let LIGHT_FROM = {x:1, y:0};      // top right
+let LIGHT_TO   = {x:0, y:1};      // bottom left
+function lightAxis(b){
+  const A={x:b.x0+LIGHT_FROM.x*b.w, y:b.y0+LIGHT_FROM.y*b.h};
+  const B={x:b.x0+LIGHT_TO.x*b.w,   y:b.y0+LIGHT_TO.y*b.h};
+  const dx=B.x-A.x, dy=B.y-A.y, L=Math.hypot(dx,dy)||1;
+  return {A:A, B:B, d:{x:dx/L, y:dy/L}, L:L};
+}
+
+/* Two colours only. TERMINATOR is where the light stops, SOFTNESS how abruptly
+   - keep it small and the falloff stays crisp instead of smearing a wash of
+   midtones through the middle of the shape. */
+const TERMINATOR = 0.62;
+const SOFTNESS   = 0.04;
+
+/* The terminator is an ARC, not a straight cut - a curved edge is what reads as
+   a rounded form. The light is a point sitting off the lit side, back along the
+   axis; LIGHT_DIST is how far off, and it is the only curvature control:
+   small = tightly curved and wraps round the side, large = flattens to a line.
+   Wherever the light sits, the arc is made to pass through the same point the
+   straight version would have, so moving it changes the curve and not the tone. */
+const LIGHT_DIST = 0.7;
+function terminatorArc(b){
+  const ax   = lightAxis(b);
+  const diag = Math.hypot(b.w,b.h)||1;
+  const L    = {x:b.cx-ax.d.x*diag*LIGHT_DIST, y:b.cy-ax.d.y*diag*LIGHT_DIST};
+  const Q    = {x:ax.A.x+ax.d.x*ax.L*TERMINATOR, y:ax.A.y+ax.d.y*ax.L*TERMINATOR};
+  return {L:L, R:dist(L,Q)};
+}
+
+function fillStyleFor(b,s){
+  const t=terminatorArc(b);
+  const g=ctx.createRadialGradient(t.L.x,t.L.y,0, t.L.x,t.L.y, t.R/TERMINATOR);
+  g.addColorStop(0, paint(s.colors.fill));
+  g.addColorStop(Math.max(0,TERMINATOR-SOFTNESS), paint(s.colors.fill));
+  g.addColorStop(Math.min(1,TERMINATOR+SOFTNESS), paint(s.colors.shadow));
+  g.addColorStop(1, paint(s.colors.shadow));
+  return g;
+}
+
+/* Engraver's shading: flat fill, then ONE band of 45-degree hatch lines at a
+   single weight - the same one tone the gradient mode gives, just drawn as
+   line texture. The band is clipped to the far side of the same terminator arc
+   the gradient uses, so both modes break on exactly the same curve. */
+const HATCH_GAP    = 5.5;     // fixed, so the texture reads the same on every shape
+const HATCH_WEIGHT = 0.5;     // share of the gap each line fills
+function hatchShade(b,s){
+  const diag = Math.hypot(b.w,b.h) || 1;
+  if(diag<36) return;                               // too small to read as texture
+  const hd  = {x:Math.SQRT1_2, y:Math.SQRT1_2};     // hatch lines, fixed 45 degrees
+  const hs  = {x:Math.SQRT1_2, y:-Math.SQRT1_2};    // and the direction we step them
+
+  // only step across the span the box actually occupies
+  let k0=1e9, k1=-1e9;
+  [[b.x0,b.y0],[b.x1,b.y0],[b.x1,b.y1],[b.x0,b.y1]].forEach(function(p){
+    const k=(p[0]-b.cx)*hs.x+(p[1]-b.cy)*hs.y;
+    if(k<k0)k0=k; if(k>k1)k1=k;
+  });
+
+  const t=terminatorArc(b);
+  ctx.save();
+  ctx.beginPath();                                  // everything beyond the arc
+  ctx.rect(b.x0-diag, b.y0-diag, b.w+diag*2, b.h+diag*2);
+  ctx.moveTo(t.L.x+t.R, t.L.y);
+  ctx.arc(t.L.x, t.L.y, t.R, 0, TAU);
+  ctx.clip('evenodd');
+
+  ctx.strokeStyle=s.colors.shadow; ctx.lineCap='butt';
+  ctx.lineWidth=HATCH_GAP*HATCH_WEIGHT;
+  for(let k=k0-HATCH_GAP; k<=k1+HATCH_GAP; k+=HATCH_GAP){
+    const cx=b.cx+hs.x*k, cy=b.cy+hs.y*k;
+    ctx.beginPath();
+    ctx.moveTo(cx-hd.x*diag, cy-hd.y*diag);
+    ctx.lineTo(cx+hd.x*diag, cy+hd.y*diag);
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
+function drawShape(s,opts){
+  const ghost = opts && opts.ghost;
+  const wp = worldPts(s);
+  if(wp.length<3) return;
+  const b = bbox(wp);
+  const closed = s.closed!==false;
+  const hatching = shading==='hatch' && !ghost;
+
+  ctx.save();
+  if(ghost) ctx.globalAlpha=0.13;
+
+  buildFill(ctx,wp,closed);                     // the fill closes whether the outline does or not
+
+  // One layer of shading and no more. There used to be a soft contact shadow
+  // cast outside each shape, which landed on whatever sat underneath and gave
+  // those shapes a second, darker band on top of their own shading.
+  // NONE in a slot switches that part off. Fill and shadow are independent:
+  // no fill leaves the silhouette see-through, no shadow leaves it flat.
+  const noFill=s.colors.fill===NONE, noShadow=s.colors.shadow===NONE;
+  if(hatching || noShadow){
+    if(!noFill){ ctx.fillStyle=s.colors.fill; ctx.fill(); }
+  }else{
+    ctx.fillStyle=fillStyleFor(b,s); ctx.fill();
+  }
+
+  if(hatching && !noShadow){                    // hatch inside the silhouette
+    ctx.save(); ctx.clip(); hatchShade(b,s); ctx.restore();
+  }
+
+  // hatchShade tramples the current path, so rebuild before stroking
+  if(s.colors.outline!==NONE){
+    if(closed) buildPath(ctx,wp); else buildOpenPath(ctx,wp);
+    ctx.lineJoin='round';
+    ctx.lineCap = closed ? 'round' : 'butt';    // butt: the outline stops flush with the chord
+    ctx.strokeStyle=s.colors.outline; ctx.lineWidth=s.lw;
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
+/* selection chrome for the Hand of Judgement */
+function rawCorners(s){
+  const b=bbox(s.pts);
+  return [{x:b.x0,y:b.y0},{x:b.x1,y:b.y0},{x:b.x1,y:b.y1},{x:b.x0,y:b.y1}];
+}
+const GRP_PAD = 12;        // visual breathing room round the group rig
+function localCorners(s){
+  const b=bbox(s.pts);
+  const px=10/Math.abs(s.sx||1), py=10/Math.abs(s.sy||1);   // near-constant visual padding
+  return [
+    {x:b.x0-px,y:b.y0-py},   // 0 TL
+    {x:b.x1+px,y:b.y0-py},   // 1 TR = rotate
+    {x:b.x1+px,y:b.y1+py},   // 2 BR
+    {x:b.x0-px,y:b.y1+py}    // 3 BL
+  ];
+}
+function drawRotateIcon(x,y){
+  ctx.save(); ctx.translate(x,y);
+  ctx.beginPath(); ctx.arc(0,0,9,0,TAU);
+  ctx.fillStyle='#fff'; ctx.fill();
+  ctx.strokeStyle='#6ea8ff'; ctx.lineWidth=1.6; ctx.stroke();
+  ctx.beginPath(); ctx.arc(0,0,4.6,-0.4,Math.PI*1.35);
+  ctx.strokeStyle='#3f6fd8'; ctx.lineWidth=1.7; ctx.stroke();
+  const a=-0.4, ax=Math.cos(a)*4.6, ay=Math.sin(a)*4.6;   // arrow head
+  ctx.beginPath(); ctx.moveTo(ax+2.8,ay-1.0); ctx.lineTo(ax-1.2,ay-2.6); ctx.lineTo(ax-0.6,ay+2.2);
+  ctx.closePath(); ctx.fillStyle='#3f6fd8'; ctx.fill();
+  ctx.restore();
+}
+/* The group's screen-space box - axis aligned in world space. This is the box
+   the flip mirrors about; the rig uses the tilted frame below instead. */
+function groupBox(grp){ return bbox(grp.flatMap(worldPts)); }
+
+/* The group RIG has an angle of its own, so the box turns with the handle you
+   are dragging - an upright box while the shapes swing round inside it reads as
+   the rig ignoring you, even though the shapes are doing the right thing.
+   Only the ANGLE is kept; the extents are re-measured from the shapes every
+   frame in that frame's own axes, so the box still wraps them tightly after a
+   move, a smear or a delete without anything having to invalidate it. The angle
+   resets whenever the membership of the selection changes. */
+let gRot=0, gRotKey='';
+function groupFrame(grp){
+  const key=grp.map(g=>g.id).join(',');
+  if(key!==gRotKey){ gRotKey=key; gRot=0; }
+  const c=Math.cos(-gRot), n=Math.sin(-gRot);
+  let a=1e9,b=1e9,d=-1e9,e=-1e9;
+  for(const g of grp) for(const p of worldPts(g)){
+    const x=p.x*c-p.y*n, y=p.x*n+p.y*c;
+    if(x<a)a=x; if(y<b)b=y; if(x>d)d=x; if(y>e)e=y;
+  }
+  return {ang:gRot, x0:a,y0:b,x1:d,y1:e, w:d-a,h:e-b, cx:(a+d)/2, cy:(b+e)/2};
+}
+function frameToWorld(f,p){
+  const c=Math.cos(f.ang), n=Math.sin(f.ang);
+  return {x:p.x*c-p.y*n, y:p.x*n+p.y*c};
+}
+function groupCorners(grp,pad){
+  const f=groupFrame(grp), p=pad||0;
+  return [{x:f.x0-p,y:f.y0-p},{x:f.x1+p,y:f.y0-p},{x:f.x1+p,y:f.y1+p},{x:f.x0-p,y:f.y1+p}]
+         .map(q=>frameToWorld(f,q));
+}
+/* The group rig: the same handles as a single shape (TR rotates, the rest
+   resize), minus the outline dots - warping is still single-shape only. */
+function drawGroupRig(grp){
+  const c=groupCorners(grp,GRP_PAD);
+  ctx.save();
+  ctx.setLineDash([7,4]); ctx.lineWidth=1.6; ctx.strokeStyle='#6ea8ff';
+  ctx.beginPath(); ctx.moveTo(c[0].x,c[0].y);
+  for(let i=1;i<4;i++) ctx.lineTo(c[i].x,c[i].y);
+  ctx.closePath(); ctx.stroke();
+  ctx.setLineDash([]);
+  c.forEach(function(p,i){
+    if(i===1){ drawRotateIcon(p.x,p.y); return; }
+    ctx.beginPath(); ctx.arc(p.x,p.y,6.5,0,TAU);
+    ctx.fillStyle='#fff'; ctx.fill();
+    ctx.lineWidth=1.8; ctx.strokeStyle='#6ea8ff'; ctx.stroke();
+  });
+  ctx.restore();
+}
+
+/* Depth arrows: two buttons off the RIGHT of the selection's screen box - up
+   raises the selection one level, down lowers it. They sit on the axis-aligned
+   world bbox rather than the tilted rig, so "up" is always up on screen even
+   when the group rig has been turned right over. */
+const DEPTH_R = 11;
+function depthBtns(grp){
+  const b=groupBox(grp);
+  const x=b.x1 + (grp.length>1?GRP_PAD:10) + DEPTH_R + 7;
+  return [{x:x, y:b.cy-DEPTH_R-4, dir: 1},
+          {x:x, y:b.cy+DEPTH_R+4, dir:-1}];
+}
+function drawDepthBtns(grp){
+  ctx.save();
+  for(const b of depthBtns(grp)){
+    const live = canReorder(grp, b.dir);      // greyed out when it is already at the end
+    ctx.beginPath(); ctx.arc(b.x,b.y,DEPTH_R,0,TAU);
+    ctx.fillStyle='#fff'; ctx.fill();
+    ctx.lineWidth=1.8; ctx.strokeStyle = live ? '#6ea8ff' : 'rgba(110,168,255,.35)';
+    ctx.stroke();
+    const d = b.dir>0 ? -1 : 1;               // chevron points the way it moves
+    ctx.beginPath();
+    ctx.moveTo(b.x-4.6, b.y-d*1.4); ctx.lineTo(b.x, b.y+d*3.4); ctx.lineTo(b.x+4.6, b.y-d*1.4);
+    ctx.lineWidth=2.1; ctx.lineCap='round'; ctx.lineJoin='round';
+    ctx.strokeStyle = live ? '#3f6fd8' : 'rgba(63,111,216,.3)';
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
+/* full=true gives the editable rig (dots + handles). Outside the Hand tool we
+   still outline the selection, because Smear and Eraser now target it. */
+function drawSelection(s,full){
+  const c = localCorners(s).map(p=>toWorld(s,p));
+
+  ctx.save();
+  ctx.setLineDash([6,5]); ctx.lineWidth=1.4;
+  ctx.strokeStyle = full ? '#6ea8ff' : 'rgba(110,168,255,.55)';
+  ctx.beginPath(); ctx.moveTo(c[0].x,c[0].y);
+  for(let i=1;i<4;i++) ctx.lineTo(c[i].x,c[i].y);
+  ctx.closePath(); ctx.stroke();
+  ctx.setLineDash([]);
+
+  if(!full){ ctx.restore(); return; }
+
+  for(const p of worldPts(s)){            // editable outline points
+    ctx.beginPath(); ctx.arc(p.x,p.y,3.1,0,TAU);
+    ctx.fillStyle='#fff'; ctx.fill();
+    ctx.lineWidth=1.3; ctx.strokeStyle='#5b86d6'; ctx.stroke();
+  }
+
+  c.forEach(function(p,i){                // corner handles, TR is the rotator
+    if(i===1){ drawRotateIcon(p.x,p.y); return; }
+    ctx.beginPath(); ctx.arc(p.x,p.y,6.5,0,TAU);
+    ctx.fillStyle='#fff'; ctx.fill();
+    ctx.lineWidth=1.8; ctx.strokeStyle='#6ea8ff'; ctx.stroke();
+  });
+  ctx.restore();
+}
+
+function render(){
+  // self-heal the backing size: the palette panel opening changes the stage width
+  if(stage.clientWidth!==Math.round(cv.width/dpr) || stage.clientHeight!==Math.round(cv.height/dpr)) resize();
+  const w=cv.width/dpr, h=cv.height/dpr;
+  drawBackground(w,h);
+
+  if(onionOn){
+    const other = view==='front' ? views.back : views.front;
+    for(const s of other) drawShape(s,{ghost:true});
+  }
+  for(const s of views[view]) drawShape(s);
+
+  if(drawing && drawing.pts.length>1){       // live brush stroke
+    ctx.save();
+    ctx.lineJoin='round'; ctx.lineCap='round';
+    ctx.strokeStyle = current.outline===NONE ? 'rgba(60,50,40,.5)' : current.outline;
+    ctx.lineWidth=4;
+    ctx.beginPath(); ctx.moveTo(drawing.pts[0].x,drawing.pts[0].y);
+    for(let i=1;i<drawing.pts.length;i++) ctx.lineTo(drawing.pts[i].x,drawing.pts[i].y);
+    ctx.stroke();
+    const first=drawing.pts[0], last=drawing.pts[drawing.pts.length-1];
+    const snapAt = closeThresholdFor(drawing.len);
+    const willClose = drawing.len>MIN_RUN && dist(first,last)<snapAt;
+
+    // chord preview: it is where the fill will cut across, and it only gets an
+    // outline if you come back within snapping range of where you started
+    ctx.setLineDash([5,5]); ctx.globalAlpha=willClose?.7:.28; ctx.lineWidth=2;
+    ctx.beginPath(); ctx.moveTo(last.x,last.y); ctx.lineTo(first.x,first.y);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    ctx.globalAlpha=1;
+    // Show the live snap radius. Since it tracks how far you have drawn, the
+    // ring grows with the stroke and you can see exactly what you have to hit.
+    if(drawing.len>MIN_RUN){
+      ctx.beginPath(); ctx.arc(first.x,first.y,snapAt,0,TAU);
+      ctx.setLineDash([3,4]); ctx.lineWidth=1.2;
+      ctx.strokeStyle = willClose ? 'rgba(63,157,90,.8)' : 'rgba(60,50,40,.3)';
+      ctx.stroke(); ctx.setLineDash([]);
+    }
+    ctx.beginPath(); ctx.arc(first.x,first.y,willClose?7:4,0,TAU);
+    ctx.lineWidth=willClose?2.5:1.5;
+    ctx.strokeStyle=willClose?'#3f9d5a':'rgba(60,50,40,.45)';
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  // One shape gets the editable rig; a group gets a faint box per shape plus
+  // one rig round the lot, since resize and rotate now take the whole group.
+  // Warping is still the anchor shape's alone, so the dots stay single-shape.
+  const grp=selGroup();
+  for(const g of grp) drawSelection(g, tool==='hand' && grp.length===1);
+  if(grp.length>1 && tool==='hand') drawGroupRig(grp);
+  if(grp.length && tool==='hand') drawDepthBtns(grp);
+
+  if(marquee){
+    const mx=Math.min(marquee.x0,marquee.x1), my=Math.min(marquee.y0,marquee.y1);
+    const mw=Math.abs(marquee.x1-marquee.x0), mh=Math.abs(marquee.y1-marquee.y0);
+    ctx.save();
+    ctx.fillStyle='rgba(110,168,255,.12)'; ctx.fillRect(mx,my,mw,mh);
+    ctx.strokeStyle='#6ea8ff'; ctx.lineWidth=1.2; ctx.setLineDash([5,4]);
+    ctx.strokeRect(mx+.5,my+.5,mw,mh);
+    ctx.restore();
+  }
+
+  if((tool==='eraser'||tool==='smear') && mouse.x>-500){
+    const er = tool==='eraser';
+    ctx.save();
+    ctx.beginPath(); ctx.arc(mouse.x,mouse.y,er?eraserR:smearR,0,TAU);
+    if(er){ ctx.fillStyle='rgba(220,80,60,.10)'; ctx.fill(); }
+    ctx.strokeStyle = er ? 'rgba(190,60,45,.7)' : 'rgba(60,50,40,.55)';
+    ctx.lineWidth=1.4; ctx.setLineDash([4,4]); ctx.stroke();
+    ctx.restore();
+  }
+
+  requestAnimationFrame(render);
+}
+
+/* ======================================================= undo / redo stacks */
+const undoStack=[], redoStack=[];
+function snapshot(){
+  return JSON.stringify({front:views.front, back:views.back, view:view,
+                         sel:selGroup().map(g=>g.id)});
+}
+function restore(str){
+  const snap=JSON.parse(str);
+  views.front=snap.front; views.back=snap.back;
+  setView(snap.view);
+  const ids=snap.sel||[];
+  const back=ids.map(id=>views[view].find(s=>s.id===id)).filter(Boolean);
+  selected=back[0]||null; extra=back.slice(1);
+  syncPalette();
+}
+function syncHistory(){
+  document.getElementById('btnUndo').disabled = !undoStack.length;
+  document.getElementById('btnRedo').disabled = !redoStack.length;
+}
+function pushUndo(){
+  undoStack.push(snapshot());
+  if(undoStack.length>60) undoStack.shift();
+  redoStack.length=0;                       // a fresh edit forks history, redo is gone
+  syncHistory();
+}
+function undo(){
+  if(!undoStack.length) return;
+  redoStack.push(snapshot());
+  restore(undoStack.pop());
+  syncHistory();
+}
+function redo(){
+  if(!redoStack.length) return;
+  undoStack.push(snapshot());
+  restore(redoStack.pop());
+  syncHistory();
+}
+
+/* ========================================================== hit testing */
+/* Pick radius for a handle or an outline dot, capped so it can never claim more
+   than a quarter of the shape it belongs to - otherwise a small shape is all
+   handle and has no middle left to grab. */
+function pickR(minDim, full){ return Math.max(3, Math.min(full, minDim*0.25)); }
+function shapeAt(w){
+  const list=views[view];
+  for(let i=list.length-1;i>=0;i--){
+    buildFill(ctx, worldPts(list[i]), list[i].closed!==false);   // click the fill, chord included
+    if(ctx.isPointInPath(w.x,w.y)) return list[i];
+  }
+  return null;
+}
+function outlineNear(w,tol){
+  const list=views[view];
+  for(let i=list.length-1;i>=0;i--){
+    for(const p of worldPts(list[i])) if(dist(p,w)<tol) return list[i];
+  }
+  return null;
+}
+
+/* =============================================================== events */
+function pos(e){
+  const r=cv.getBoundingClientRect();
+  return {x:e.clientX-r.left, y:e.clientY-r.top};
+}
+
+cv.addEventListener('pointerdown',e=>{
+  cv.setPointerCapture(e.pointerId);
+  const w=pos(e); mouse.down=true; mouse.x=w.x; mouse.y=w.y;
+
+  if(tool==='brush'){
+    drawing={pts:[w], len:0};
+    return;
+  }
+
+  if(tool==='eraser' || tool==='smear'){
+    // Start the sweep wherever you like - empty paper included. It locks onto
+    // the first outline the disc actually touches and then stays on that one.
+    carve={shapes:[], locked:false, mode: tool==='eraser'?'erase':'smear', prev:w};
+    tryCarve(w);
+    return;
+  }
+
+  /* ---- Hand of Judgement ---- */
+  // Depth arrows first: they sit clear of every box, so nothing else can want them.
+  {
+    const g0=selGroup();
+    if(g0.length) for(const b of depthBtns(g0)){
+      if(dist(b,w) < DEPTH_R+3){ reorderSel(b.dir); gesture=null; return; }
+    }
+  }
+
+  // A group carries its own rig: resize and rotate act on all of it at once,
+  // about the group's screen box. Warping is still the anchor shape's alone,
+  // so the per-shape handles only appear when the selection is a single shape.
+  const grp=selGroup();
+  if(grp.length>1){
+    const gc=groupCorners(grp,GRP_PAD);
+    const gf=groupFrame(grp), gR=pickR(Math.min(gf.x1-gf.x0, gf.y1-gf.y0), 13);
+    for(let i=0;i<4;i++){
+      if(dist(gc[i],w) < gR){
+        pushUndo();
+        // Snapshot the group: every move is computed from the state at grab,
+        // so the box the gesture works against never drifts under itself.
+        const snap=grp.map(g=>({s:g, x:g.x, y:g.y, sx:g.sx, sy:g.sy, rot:g.rot}));
+        if(i===1){                                   // top right = rotate
+          const f=groupFrame(grp), piv=frameToWorld(f,{x:f.cx,y:f.cy});
+          gesture={mode:'grotate', cx:piv.x, cy:piv.y, rot0:gRot,
+                   ang0:Math.atan2(w.y-piv.y, w.x-piv.x), grab:snap};
+        }else{                                       // others = resize
+          const raw=groupCorners(grp,0);             // unpadded: what actually scales
+          const a=raw[(i+2)%4];                      // the pinned corner
+          // The rig's padding is a constant number of pixels, so it does NOT
+          // scale with the box. Measure the drag against the unpadded corner and
+          // carry the pad across as a fixed offset, or the handle falls short of
+          // the cursor by the pad the moment the box grows.
+          gesture={mode:'gresize', anchor:a,
+                   pad:{x:gc[i].x-raw[i].x, y:gc[i].y-raw[i].y},
+                   diag:{x:raw[i].x-a.x, y:raw[i].y-a.y}, grab:snap};
+        }
+        return;
+      }
+    }
+  }
+
+  // Handles belong to a single shape. With a group up, the only gesture is move.
+  if(selected && !extra.length){
+    const corners = localCorners(selected).map(p=>toWorld(selected,p));
+    // A small shape has to keep a core you can grab to MOVE it. At a flat 13/10px
+    // the handle and outline-dot pick radii swallow a shape only a few px across
+    // whole, so a click plumb in the middle grabbed a point and warped it - the
+    // shape could not be moved at all. Both radii are capped against the shape's
+    // own on-screen size.
+    const sb=bbox(worldPts(selected));
+    const minDim=Math.min(sb.x1-sb.x0, sb.y1-sb.y0);
+
+    // 1. corner handles
+    const cR=pickR(minDim,13);
+    for(let i=0;i<4;i++){
+      if(dist(corners[i],w) < cR){
+        pushUndo();
+        if(i===1){                                     // top right = rotate
+          const b=bbox(selected.pts);
+          const pivot=toWorld(selected,{x:b.cx,y:b.cy});
+          gesture={mode:'rotate', pivotLocal:{x:b.cx,y:b.cy}, cx:pivot.x, cy:pivot.y,
+                   lastAng:Math.atan2(w.y-pivot.y, w.x-pivot.x)};
+        }else{                                         // others = resize
+          const lc=rawCorners(selected);   // unpadded: keeps the anchor corner pinned
+          const anchorLocal = lc[(i+2)%4];
+          gesture={mode:'resize', cornerLocal:lc[i], anchorLocal:anchorLocal,
+                   anchorWorld:toWorld(selected,anchorLocal)};
+        }
+        return;
+      }
+    }
+
+    // 2. outline points -> soft warp
+    const wp=worldPts(selected);
+    const wR=pickR(minDim,10);
+    for(let i=0;i<wp.length;i++){
+      if(dist(wp[i],w)<wR){
+        pushUndo();
+        gesture={mode:'warp', weights:warpWeights(selected.pts,i,selected.closed!==false),
+                 last:toLocal(selected,w)};
+        return;
+      }
+    }
+  }
+
+  // 3. select / move / marquee
+  const s=shapeAt(w);
+  if(s){
+    if(e.shiftKey){                          // shift = add or drop one shape
+      if(inSel(s)) dropFromSel(s);
+      else if(selected) extra.push(s);
+      else selected=s;
+      syncPalette(); gesture=null; return;
+    }
+    // Clicking anything already in the group drags the whole group.
+    if(!inSel(s)){ selected=s; extra=[]; syncPalette(); }
+    pushUndo();
+    gesture={mode:'move', grab:selGroup().map(g=>({s:g, off:{x:g.x-w.x, y:g.y-w.y}}))};
+  }else{
+    if(!e.shiftKey){ clearSel(); syncPalette(); }
+    gesture=null;
+    marquee={x0:w.x, y0:w.y, x1:w.x, y1:w.y, add:e.shiftKey};   // drag a box to multi-select
+  }
+});
+
+cv.addEventListener('pointermove',e=>{
+  const w=pos(e); mouse.x=w.x; mouse.y=w.y;
+
+  if(drawing){
+    const last=drawing.pts[drawing.pts.length-1];
+    const step=dist(last,w);
+    if(step>1.5){ drawing.pts.push(w); drawing.len+=step; }
+    return;
+  }
+  if(carve){ tryCarve(w); return; }
+  if(marquee){ marquee.x1=w.x; marquee.y1=w.y; return; }
+  if(!gesture || !selected) return;
+  const s=selected;
+
+  if(gesture.mode==='move'){
+    for(const g of gesture.grab){ g.s.x=w.x+g.off.x; g.s.y=w.y+g.off.y; }
+  }
+  else if(gesture.mode==='grotate'){
+    // Turn every shape by the same angle and swing its centre round the group
+    // pivot, so the arrangement rotates as one body rather than each in place.
+    const g=gesture;
+    const d=Math.atan2(w.y-g.cy, w.x-g.cx)-g.ang0;
+    gRot=g.rot0+d;                                 // the rig turns with the cursor
+    const c=Math.cos(d), n=Math.sin(d);
+    for(const it of g.grab){
+      it.s.rot=it.rot+d;
+      const dx=it.x-g.cx, dy=it.y-g.cy;
+      it.s.x=g.cx+dx*c-dy*n;
+      it.s.y=g.cy+dx*n+dy*c;
+    }
+  }
+  else if(gesture.mode==='gresize'){
+    // One uniform factor, projected onto the box diagonal. A rotated shape
+    // cannot hold a non-uniform SCREEN-space scale without shearing, and the
+    // model has no shear - so a group scales evenly and nothing distorts.
+    const g=gesture, a=g.anchor, d=g.diag;
+    const L=d.x*d.x+d.y*d.y;
+    const t={x:w.x-g.pad.x, y:w.y-g.pad.y};        // where the bare corner must land
+    let f = L>1e-6 ? ((t.x-a.x)*d.x + (t.y-a.y)*d.y)/L : 1;
+    f=Math.max(0.06,f);                      // no mirroring by dragging past
+    for(const it of g.grab){
+      it.s.sx=it.sx*f; it.s.sy=it.sy*f;
+      it.s.x=a.x+(it.x-a.x)*f;               // spacing scales with the shapes
+      it.s.y=a.y+(it.y-a.y)*f;
+    }
+  }
+  else if(gesture.mode==='rotate'){
+    const before=toWorld(s,gesture.pivotLocal);
+    const ang=Math.atan2(w.y-gesture.cy, w.x-gesture.cx);
+    s.rot += ang-gesture.lastAng;
+    gesture.lastAng=ang;
+    const after=toWorld(s,gesture.pivotLocal);          // keep pivot pinned
+    s.x+=before.x-after.x; s.y+=before.y-after.y;
+    gesture.cx=before.x; gesture.cy=before.y;
+  }
+  else if(gesture.mode==='resize'){
+    const g=gesture;
+    const rel={x:w.x-g.anchorWorld.x, y:w.y-g.anchorWorld.y};
+    const c=Math.cos(-s.rot), n=Math.sin(-s.rot);
+    const rx=rel.x*c-rel.y*n, ry=rel.x*n+rel.y*c;
+    const dx=g.cornerLocal.x-g.anchorLocal.x, dy=g.cornerLocal.y-g.anchorLocal.y;
+    if(Math.abs(dx)>1e-3){ let v=rx/dx; s.sx = Math.sign(v)*Math.max(0.06,Math.abs(v)); }
+    if(Math.abs(dy)>1e-3){ let v=ry/dy; s.sy = Math.sign(v)*Math.max(0.06,Math.abs(v)); }
+    const sc={x:g.anchorLocal.x*s.sx, y:g.anchorLocal.y*s.sy};
+    const cc=Math.cos(s.rot), nn=Math.sin(s.rot);
+    s.x=g.anchorWorld.x-(sc.x*cc-sc.y*nn);
+    s.y=g.anchorWorld.y-(sc.x*nn+sc.y*cc);
+  }
+  else if(gesture.mode==='warp'){
+    const cur=toLocal(s,w);
+    const dx=cur.x-gesture.last.x, dy=cur.y-gesture.last.y;
+    const wts=gesture.weights;
+    for(let i=0;i<s.pts.length;i++){
+      if(wts[i]<=0) continue;
+      s.pts[i].x+=dx*wts[i]; s.pts[i].y+=dy*wts[i];
+    }
+    gesture.last=cur;
+  }
+});
+
+function endStroke(){
+  if(carve && carve.mode==='smear')
+    for(const s of carve.shapes) smearPolish(s, carve.polish.get(s));
+  if(drawing){ finishBrush(drawing.pts); drawing=null; }
+  if(marquee){ finishMarquee(); marquee=null; }
+  carve=null; gesture=null; mouse.down=false;
+}
+
+/* A shape joins the selection if its bounding box overlaps the drawn box - the
+   forgiving test, so you can lasso a crowd without enclosing every last pixel. */
+function finishMarquee(){
+  const x0=Math.min(marquee.x0,marquee.x1), x1=Math.max(marquee.x0,marquee.x1);
+  const y0=Math.min(marquee.y0,marquee.y1), y1=Math.max(marquee.y0,marquee.y1);
+  if(x1-x0<4 && y1-y0<4) return;                  // that was a click, not a box
+  const hit=views[view].filter(sh=>{
+    const b=bbox(worldPts(sh));
+    return b.x1>=x0 && b.x0<=x1 && b.y1>=y0 && b.y0<=y1;
+  });
+  if(!marquee.add) clearSel();
+  for(const sh of hit) if(!inSel(sh)){ if(selected) extra.push(sh); else selected=sh; }
+  syncPalette();
+}
+cv.addEventListener('pointerup',endStroke);
+cv.addEventListener('pointercancel',endStroke);
+cv.addEventListener('pointerleave',()=>{ if(!mouse.down){ mouse.x=-999; mouse.y=-999; } });
+
+/* ================================================================ brush */
+function laplacian(pts,amount,passes,closed){
+  let p=pts.map(q=>({x:q.x,y:q.y}));
+  for(let k=0;k<passes;k++){
+    const n=p.length, out=p.map(q=>({x:q.x,y:q.y}));
+    for(let i=0;i<n;i++){
+      if(!closed && (i===0 || i===n-1)) continue;   // endpoints of an open run stay put
+      const a=p[(i-1+n)%n], b=p[(i+1)%n];
+      out[i]={ x:p[i].x+((a.x+b.x)/2-p[i].x)*amount,
+               y:p[i].y+((a.y+b.y)/2-p[i].y)*amount };
+    }
+    p=out;
+  }
+  return p;
+}
+
+function finishBrush(raw){
+  if(raw.length<4) return;
+  // Come back near where you started and the outline snaps shut; otherwise the
+  // stroke stays open - filled, but with no outline across the gap.
+  const runLen = pathLength(raw);
+  const closed = runLen>MIN_RUN &&
+                 dist(raw[0], raw[raw.length-1]) < closeThresholdFor(runLen);
+
+  let pts = rdp(raw, 1.6);                       // kill jitter
+  // Point spacing scales with the stroke too. A flat 12px left a small shape
+  // with three points, which the guard below then threw away entirely.
+  const step = Math.max(3, Math.min(12, runLen/14));
+  pts = resample(pts, step, closed);
+  if(pts.length<5) return;
+  pts = laplacian(pts, 0.35, 2, closed);         // gentle confidence pass
+  const b = bbox(pts);
+  if(b.w<5 && b.h<5) return;
+
+  pushUndo();
+  const shape={
+    id: uid++,
+    pts: pts.map(p=>({x:p.x-b.cx, y:p.y-b.cy})),
+    x:b.cx, y:b.cy, rot:0, sx:1, sy:1, lw:brushW, closed:closed,
+    colors:{ outline:current.outline, fill:current.fill, shadow:current.shadow }
+  };
+  views[view].push(shape);
+}
+
+/* ====================================================== smear and eraser */
+/* Both work the same way round the edges: lazily lock onto whichever outline the
+   disc first touches - so a sweep can start on blank paper and drag in - then stay
+   on that lot for the rest of the stroke. */
+function tryCarve(w){
+  const R = carve.mode==='erase'?eraserR:smearR;
+  if(!carve.locked){
+    // A selection claims the tool outright - that is the only way to reach an
+    // outline buried under other shapes. The smear takes the WHOLE selection, so a
+    // group can be pushed about in one gesture; the eraser stays on the anchor
+    // shape, because rubbing a group away at once is not something you can aim.
+    let group;
+    if(selected)  group = carve.mode==='smear' ? selGroup() : [selected];
+    else { const s = outlineNear(w,R); group = s ? [s] : []; }
+    if(!group.some(g=>pointsInRange(g,w,R))) return;
+    pushUndo();                       // only once we are actually going to change something
+    carve.shapes=group; carve.locked=true;
+    // every point the stroke touches, per shape, for the polish pass
+    carve.polish=new Map(group.map(g=>[g,new Set()]));
+  }
+  for(const s of carve.shapes.slice())   // a copy: the eraser can drop one mid-sweep
+    if(carve.mode==='erase') eraseAt(s,w);
+    else                     smearAt(s,w,carve.prev||w);
+  carve.prev=w;
+}
+
+function pointsInRange(s,w,r){
+  const lp=toLocal(s,w), rl=localRadius(s,r);
+  return s.pts.some(p=>dist(p,lp)<rl);
+}
+
+/* Radius in the shape's own coordinates - a shape scaled up needs a smaller
+   local radius to cover the same distance on screen. */
+function localRadius(s,r){
+  const avg=(Math.abs(s.sx)+Math.abs(s.sy))/2 || 1;
+  return r/avg;
+}
+
+/* THE ERASER - rubs points off the outline. Whatever survives is re-joined as
+   a single open run, so the erased span simply has no outline any more and the
+   fill closes straight across it. Rub enough away and the shape is gone. */
+function eraseAt(s,w){
+  const lp=toLocal(s,w), rl=localRadius(s,eraserR);
+  const pts=s.pts, n=pts.length;
+  const keep=pts.map(p=>dist(p,lp)>=rl);
+  if(keep.every(Boolean)) return;
+
+  const run=longestRun(keep, s.closed!==false);
+  if(!run || run.len<4){                        // nothing worth keeping - bin it
+    const list=views[view], i=list.indexOf(s);
+    if(i>=0) list.splice(i,1);
+    if(inSel(s)){ dropFromSel(s); syncPalette(); }
+    carve.shapes=carve.shapes.filter(g=>g!==s);
+    return;
+  }
+  const out=[];
+  for(let k=0;k<run.len;k++) out.push(pts[(run.start+k)%n]);
+  s.pts=out;
+  s.closed=false;                               // the erased span is the bare chord
+}
+
+/* Longest surviving stretch of true values, wrapping if the outline is closed */
+function longestRun(keep,wrap){
+  const n=keep.length;
+  let best=null, start=-1, len=0;
+  const lim = wrap ? n*2 : n;
+  for(let i=0;i<lim;i++){
+    if(keep[i%n]){
+      if(start<0){ start=i; len=0; }
+      len++;
+      if(len>n) len=n;
+      if(!best || len>best.len) best={start:start%n, len:len};
+    }else{ start=-1; len=0; }
+  }
+  return best;
+}
+
+/* THE SMEAR - drags the outline along with the cursor, like a smudge tool.
+   Points inside the disc are carried by the pointer's own motion, full strength
+   at the centre and fading to nothing at the rim, so a grab-and-drag keeps hold
+   of the outline for as long as you keep moving and a push shoves it ahead of
+   the disc. It used to shove points radially out to the rim instead, which meant
+   the outline could never travel with the cursor - it slid off the disc and
+   snapped back the moment the centre passed it. */
+/* Full strength across the middle of the disc, fading to nothing at the rim.
+   A pure cosine from the centre gripped exactly one point properly and a pull came
+   out as a hairline needle; the flat core drags a rounded lobe. */
+function gripFalloff(d,rl){
+  const core = rl*0.4;
+  if(d<=core) return 1;
+  return 0.5*(1+Math.cos(Math.PI*(d-core)/(rl-core)));
+}
+
+const SMEAR_TENSION = 0.30;              // how hard the outline pulls itself straight
+const SMEAR_SLIDE   = 0.3;               // how much of a drag ALONG the outline counts
+const SMEAR_HEAL    = 1.0;               // the shrinking half of the tension, relative
+
+/* THE SMEAR - drags the outline along with the cursor, like a smudge tool.
+   Points inside the disc are carried by the pointer's own motion, at full strength
+   in the middle and fading to nothing at the rim, so a push shoves the outline
+   ahead of the disc and a grab hauls a lobe out of it. It used to shove points
+   radially out to the rim instead, which meant the outline could never travel with
+   the cursor at all - it slid off the disc and snapped back the moment the centre
+   passed it. */
+function smearAt(s,w,wp){
+  const closed = s.closed!==false;
+  const lp = toLocal(s,w), pp = toLocal(s,wp);
+  const rl = localRadius(s,smearR);
+  const dx = lp.x-pp.x, dy = lp.y-pp.y;
+  const len = Math.hypot(dx,dy);
+  if(len < 0.02) return;                   // a still cursor smudges nothing
+
+  // Sub-step a fast flick, otherwise the disc teleports across the outline and
+  // grabs nothing on the way.
+  const steps = Math.max(1, Math.ceil(len/(rl*0.35)));
+  const sx = dx/steps, sy = dy/steps;
+  // Refine the stretch of outline this move is about to touch, BEFORE touching it.
+  // A small disc landing on brush-spaced points had only one point to work with and
+  // pulled a single-point spike; done afterwards the damage is already in the outline.
+  resampleOutline(s, rl, {x:(lp.x+pp.x)/2, y:(lp.y+pp.y)/2, r:len/2 + rl*3});
+  const pts = s.pts;
+  const polish = carve.polish.get(s);
+  const before = pts.map(p=>({x:p.x, y:p.y}));   // to put back anything that crosses
+  const np = pts.length;
+  const moved = new Map();                 // point -> strongest pull it felt this move
+  for(let st=1; st<=steps; st++){
+    const cx = pp.x + dx*st/steps, cy = pp.y + dy*st/steps;
+    for(let i=0;i<np;i++){
+      const p = pts[i];
+      const d = Math.hypot(p.x-cx, p.y-cy);
+      if(d>=rl) continue;
+      const k = gripFalloff(d,rl);
+      // Only the part of the motion across the outline gets to move it at full
+      // strength; sliding the disc ALONG an edge is damped hard. Undamped, running
+      // the disc round a shape shovelled the outline along itself and piled it up
+      // into a thin flap - the outline really was being carried from one side of
+      // the shape to the other.
+      const a = pts[(i-1+np)%np], b = pts[(i+1)%np];
+      let tx = b.x-a.x, ty = b.y-a.y;
+      const tl = Math.hypot(tx,ty);
+      let mx = sx, my = sy;
+      if(tl > 1e-6){
+        tx/=tl; ty/=tl;
+        const along = (sx*tx + sy*ty)*(1-SMEAR_SLIDE);
+        mx -= tx*along; my -= ty*along;
+      }
+      p.x += mx*k; p.y += my*k;
+      if(k > (moved.get(p)||0)) moved.set(p,k);
+      polish.add(p);
+    }
+  }
+  if(!moved.size) return;
+
+  // Tension. Every point the disc touched - the ones under the middle of it
+  // included - gets pulled back against the bend THIS MOVE put in the outline. It
+  // is a Laplacian of the displacement, not of the outline: what it relaxes is the
+  // difference between how far the point moved and how far its neighbours moved.
+  // Smoothing the positions instead is curve-shortening flow, which eats a closed
+  // curve alive; it went unnoticed while only a short arc was ever touched at once
+  // and the rest of the outline anchored it, but a disc wide enough to swallow a
+  // whole small shape touches every point every frame, nothing anchors, and the
+  // shape boiled away to nothing in about fifteen frames. A displacement Laplacian
+  // is zero for a shape being carried along bodily, so that case now just moves.
+  //
+  // It is doing two jobs at once: it keeps the outline smooth instead of spiky, and it is what
+  // makes the disc LET GO. A point held at full strength lags a little against the
+  // tension each frame, the lag carries it out of the middle of the disc, its hold
+  // weakens, and it drops out. Nothing is latched, so hauling one side of a shape
+  // across to the other is not possible - the outline stretches to where the pull
+  // and the tension balance and no further, and how far that is scales with the
+  // disc, because a wide disc holds a broad low bulge that the tension barely
+  // resists while a small one can only raise a sharp one that it flattens at once.
+  const n = pts.length;
+  // The shoulder is measured in disc radii, not in points. A fixed span of points
+  // is a much wider stretch of outline for a small disc than a large one, and it
+  // smoothed a fine smear away as fast as it was made.
+  const spacing = Math.max(1, pathLength(pts)/n);
+  const span = Math.max(3, Math.min(14, Math.round(rl/spacing*2)+2));
+  const touched = new Map();
+  for(let i=0;i<n;i++){
+    const g = moved.get(pts[i]);
+    if(!g) continue;
+    for(let j=i-span;j<=i+span;j++){
+      const q = closed ? (j+n*2)%n : j;
+      if(!closed && (q<=0 || q>=n-1)) continue;
+      const decay = g*Math.max(0, 1-Math.abs(j-i)/(span+1));
+      if(decay > (touched.get(q)||0)) touched.set(q,decay);
+    }
+  }
+  // ...and a second, weaker pull towards the outline's own neighbours, which is
+  // what rounds off a bend the disc left behind on an earlier frame. The
+  // displacement pass can only see the bend it has just made, so on its own it
+  // never heals anything and a horn survives the rest of the stroke. This one is
+  // the shrinking kind, so it fades out as the disc takes in more of the outline
+  // and is gone by the time it holds all of it - curve-shortening flow is only
+  // harmless while some of the outline is still anchored outside the disc.
+  const heal = SMEAR_TENSION*SMEAR_HEAL*Math.max(0, 1-touched.size/n);
+  for(const [i,k] of touched){
+    const ia=(i-1+n)%n, ib=(i+1)%n;
+    const a=pts[ia], b=pts[ib], a0=before[ia], b0=before[ib], p0=before[i];
+    const w=0.4+0.6*k, f=SMEAR_TENSION*w, h=heal*w;
+    pts[i].x += (((a.x-a0.x)+(b.x-b0.x))/2 - (pts[i].x-p0.x))*f + ((a.x+b.x)/2-pts[i].x)*h;
+    pts[i].y += (((a.y-a0.y)+(b.y-b0.y))/2 - (pts[i].y-p0.y))*f + ((a.y+b.y)/2-pts[i].y)*h;
+  }
+  relieveCusps(pts, touched, closed);
+  // The crossing guard has to stay under the point spacing, or points that
+  // legitimately sit close together read as a collision and the outline locks solid.
+  stopCrossings(pts, touched, before, closed,
+                Math.min(Math.max(1.5, rl*0.25), spacing*0.9));
+  untangle(s, touched, closed);
+}
+
+/* Second line of defence. Anything that folded over anyway gets the fold cut out:
+   find a segment near the smear that crosses another, and drop whichever of the
+   two loops the crossing makes is the smaller one, joining them at the crossing
+   point itself. A shape holds one outline, so a fold is never something to keep -
+   it just draws as a crossed-over tangle. */
+function untangle(s, touched, closed){
+  const idx=[...touched.keys()];
+  for(let round=0; round<6; round++){
+    const pts=s.pts, n=pts.length;
+    if(n<6) return;
+    let cut=null;
+    for(const i of idx){
+      if(i>=n-1 && !closed) continue;
+      const a=pts[i], b=pts[(i+1)%n];
+      for(let j=0;j<(closed?n:n-1);j++){
+        const gapA=Math.abs(j-i), gap=closed?Math.min(gapA,n-gapA):gapA;
+        if(gap<2) continue;
+        const X=segCross(a,b,pts[j],pts[(j+1)%n]);
+        if(X){ cut={i:Math.min(i,j), j:Math.max(i,j), X}; break; }
+      }
+      if(cut) break;
+    }
+    if(!cut) return;
+    const {i,j,X}=cut;
+    const inner=pts.slice(i+1, j+1);                 // the loop the crossing pinches off
+    const outer=pts.slice(0,i+1).concat([X], pts.slice(j+1));
+    const keep = inner.length > outer.length ? [X].concat(inner) : outer;
+    if(keep.length<5) return;
+    s.pts=keep;
+    idx.length=0; for(let k=0;k<keep.length;k++) idx.push(k);   // recheck everything after a cut
+  }
+}
+
+/* Where two segments cross, or null. */
+function segCross(a,b,c,d){
+  const rx=b.x-a.x, ry=b.y-a.y, sx2=d.x-c.x, sy2=d.y-c.y;
+  const den=rx*sy2-ry*sx2;
+  if(Math.abs(den)<1e-9) return null;
+  const t=((c.x-a.x)*sy2-(c.y-a.y)*sx2)/den;
+  const u=((c.x-a.x)*ry-(c.y-a.y)*rx)/den;
+  if(t<=0||t>=1||u<=0||u>=1) return null;
+  return {x:a.x+rx*t, y:a.y+ry*t};
+}
+
+/* One tidy-up over everything the stroke touched, once the pointer is up. The
+   little hooks a smear leaves where the disc first crossed the outline are too
+   small for the tension pass to have finished off while the stroke was still
+   moving away from them. */
+function smearPolish(s, polish){
+  if(!polish || !polish.size) return;
+  const closed = s.closed!==false;
+  const pts = s.pts, touched = new Map();
+  for(let i=0;i<pts.length;i++) if(polish.has(pts[i])) touched.set(i,1);
+  if(!touched.size) return;
+  const n = pts.length;
+  for(let pass=0; pass<2; pass++)
+    for(const i of touched.keys()){
+      if(!closed && (i<=0 || i>=n-1)) continue;
+      const a=pts[(i-1+n)%n], b=pts[(i+1)%n];
+      pts[i].x+=((a.x+b.x)/2-pts[i].x)*0.25;
+      pts[i].y+=((a.y+b.y)/2-pts[i].y)*0.25;
+    }
+  relieveCusps(pts, touched, closed);
+  untangle(s, touched, closed);
+}
+
+/* A hairpin is what a smear leaves when the disc drags a stretch of outline
+   sideways along itself: the outline doubles back on its own path and draws as a
+   whisker of stroke sticking out of the shape with no width to it. It is not a
+   crossing, so the guard below never sees it. Anywhere the outline turns back on
+   itself by more than about 100 degrees, pull the point most of the way onto the
+   line between its neighbours - which folds the whisker away. */
+function relieveCusps(pts, touched, closed){
+  const n=pts.length;
+  for(let pass=0; pass<3; pass++){
+    for(const i of touched.keys()){
+      if(!closed && (i<=0 || i>=n-1)) continue;
+      const p=pts[i], a=pts[(i-1+n)%n], b=pts[(i+1)%n];
+      const v1x=p.x-a.x, v1y=p.y-a.y, v2x=b.x-p.x, v2y=b.y-p.y;
+      const m=Math.hypot(v1x,v1y)*Math.hypot(v2x,v2y);
+      if(m<1e-6) continue;
+      if((v1x*v2x+v1y*v2y)/m > -0.2) continue;          // not a hairpin
+      p.x += ((a.x+b.x)/2-p.x)*0.7;
+      p.y += ((a.y+b.y)/2-p.y)*0.7;
+    }
+  }
+}
+
+/* Nothing may be pushed through anything else. Any point this move carried onto a
+   distant stretch of the same outline goes back where it was, so the wall of a
+   dent stops dead when it meets the far wall instead of passing through it and
+   knotting the shape up. Without this a small disc could fold the outline over
+   itself and leave a shape with a crossed-over tangle in it. */
+function stopCrossings(pts, touched, before, closed, guard){
+  const n = pts.length, gap = 2, last = closed ? n : n-1;
+  for(let pass=0; pass<2; pass++){
+    let any=false;
+    for(const i of touched.keys()){
+      for(let j=0;j<last;j++){
+        let d1=Math.abs(j-i), d2=Math.abs(j+1-i);
+        if(closed){ d1=Math.min(d1,n-d1); d2=Math.min(d2,n-d2); }
+        if(d1<=gap || d2<=gap) continue;                  // its own neighbourhood
+        if(segDist(pts[i], pts[j], pts[(j+1)%n]) < guard){
+          pts[i].x=before[i].x; pts[i].y=before[i].y; any=true; break;
+        }
+      }
+    }
+    if(!any) break;
+  }
+}
+
+function segDist(p,a,b){
+  const vx=b.x-a.x, vy=b.y-a.y, L=vx*vx+vy*vy;
+  let t = L ? ((p.x-a.x)*vx+(p.y-a.y)*vy)/L : 0;
+  t = t<0?0:t>1?1:t;
+  return Math.hypot(p.x-(a.x+vx*t), p.y-(a.y+vy*t));
+}
+
+/* Dragging one stretch of outline a long way leaves a huge gap between the last
+   point it moved and the first it did not - a dead straight stretch with nothing
+   in it to smear next time round. Split anything that has been pulled too far
+   apart (and drop points that have been bunched up into each other). */
+function resampleOutline(s, rl, near){
+  const closed = s.closed!==false;
+  const pts=s.pts, out=[];
+  // The spacings come off the disc, but they have to be clamped against the SHAPE
+  // as well. A disc far bigger than what it is smearing asked for a spacing wider
+  // than the whole outline, so every point but a handful was culled as "too tight"
+  // on every single move, and a small shape under a big disc was decimated to the
+  // four-point floor and then to nothing. Never thin an outline that is already
+  // sparse, and never ask for a spacing coarser than a fraction of its perimeter.
+  const perim = pathLength(pts) + (closed ? dist(pts[pts.length-1], pts[0]) : 0);
+  const maxSeg = Math.max(3, Math.min(rl*0.5, perim/12));
+  const minSeg = pts.length<=16 ? 0 : Math.min(maxSeg*0.18, perim/40);
+  const last = closed ? pts.length : pts.length-1;
+  const inReach = p => !near || Math.hypot(p.x-near.x, p.y-near.y) < near.r;
+  for(let i=0;i<pts.length;i++){
+    const a=pts[i];
+    if(out.length && i<last && inReach(a)){
+      const prev=out[out.length-1];
+      if(dist(prev,a) < minSeg) continue;             // too tight - skip it
+    }
+    out.push(a);
+    if(i>=last || out.length>600) continue;
+    const b=pts[(i+1)%pts.length], d=dist(a,b);
+    if(d>maxSeg && inReach(a)){
+      const k=Math.min(8, Math.floor(d/maxSeg));
+      for(let j=1;j<=k;j++)
+        out.push({x:a.x+(b.x-a.x)*j/(k+1), y:a.y+(b.y-a.y)*j/(k+1)});
+    }
+  }
+  if(out.length>=4) s.pts=out;
+}
+
+/* ================================================== warp falloff weights */
+function warpWeights(pts,idx,closed){
+  const {s,total}=arcLengths(pts,closed);
+  // Falloff scales with the outline: a flat 90 units swallowed a small shape
+  // whole, so dragging a point just slid the thing sideways.
+  const R=Math.max(26, Math.min(WARP_R, total*0.30));
+  const n=pts.length, out=new Array(n).fill(0);
+  for(let i=0;i<n;i++){
+    let d=Math.abs(s[i]-s[idx]);
+    if(closed) d=Math.min(d,total-d);            // wrap around the loop
+    out[i] = d>=R ? 0 : 0.5*(1+Math.cos(Math.PI*d/R));
+  }
+  out[idx]=1;
+  return out;
+}
+
+/* ============================================================= palette UI */
+const PALETTE=[
+  '#2E2A28','#5A5350','#8A817C','#C9C2B4','#F2EFE8','#FFFFFF',
+  '#FFE9CF','#F7C59F','#E8A87C','#C98A5E','#8C5A3C','#5C3A26',
+  '#FFF3B0','#FFD479','#F2A65A','#E4572E','#C1292E','#7A1F2B',
+  '#DFF5E1','#B7E4C7','#74C69D','#40916C','#2D6A4F','#1B4332',
+  '#E4F1F7','#A8DADC','#5AA9E6','#3D5A80','#2B3A67','#293241',
+  '#FFE1EC','#FFC2D1','#FF8FAB','#E0C3FC','#B39DDB','#7E57C2'
+];
+
+const swatchesEl=document.getElementById('swatches');
+const ghost=document.getElementById('ghost');
+let dragColor=null, dragFrom=null;
+
+[NONE].concat(PALETTE).forEach(hex=>{
+  const none = hex===NONE;
+  const d=document.createElement('div');
+  d.className = none ? 'sw xnone' : 'sw';
+  if(!none) d.style.background=hex;
+  d.title = none ? 'None' : hex;
+  d.addEventListener('pointerdown',e=>{ e.preventDefault(); startColorDrag(hex,null,e); });
+  swatchesEl.appendChild(d);
+});
+
+/* A colour drag starts from a swatch or from a slot - dragging between the two
+   slot columns is how a colour moves between the defaults and the selection. */
+function startColorDrag(hex,fromSlot,e){
+  dragColor=hex; dragFrom=fromSlot;
+  ghost.classList.toggle('xnone',hex===NONE);
+  ghost.style.background = hex===NONE ? '#fff' : hex;
+  ghost.style.display='block';
+  ghost.style.left=e.clientX+'px'; ghost.style.top=e.clientY+'px';
+}
+
+document.getElementById('palette').addEventListener('pointerdown',e=>{
+  const sl=e.target.closest && e.target.closest('.slot');
+  if(!sl) return;
+  e.preventDefault();
+  startColorDrag(slotColor(sl),sl,e);
+});
+
+window.addEventListener('pointermove',e=>{
+  if(!dragColor) return;
+  ghost.style.left=e.clientX+'px'; ghost.style.top=e.clientY+'px';
+  document.querySelectorAll('.slot').forEach(sl=>sl.classList.remove('hot'));
+  const el=document.elementFromPoint(e.clientX,e.clientY);
+  const slot=el && el.closest('.slot');
+  if(slot) slot.classList.add('hot');
+});
+
+window.addEventListener('pointerup',e=>{
+  if(!dragColor) return;
+  ghost.style.display='none';
+  document.querySelectorAll('.slot').forEach(sl=>sl.classList.remove('hot'));
+  const el=document.elementFromPoint(e.clientX,e.clientY);
+  const slot=el && el.closest('.slot');
+  if(slot && slot!==dragFrom) applyColor(slot.dataset.slot, dragColor, slot.dataset.target);
+  dragColor=null; dragFrom=null;
+});
+
+// Left column is the default for the next shape drawn, right column is the
+// selection. A drop hits one or the other, never both - that is what makes
+// dragging between the columns mean anything.
+function slotColor(sl){
+  return (sl.dataset.target==='sel' && selected ? selected.colors : current)[sl.dataset.slot];
+}
+function applyColor(which,hex,target){
+  pushUndo();
+  if(target==='sel'){ for(const g of selGroup()) g.colors[which]=hex; }
+  else current[which]=hex;
+  syncPalette();
+}
+
+const TOOL_NAMES={brush:'Brush', smear:'Smear', eraser:'Eraser', hand:'Hand of Judgement'};
+const TOOL_PANELS={brush:'optBrush', smear:'optSmear', eraser:'optEraser', hand:'optHand'};
+
+/* The sidebar is always open now - it just changes what it offers. */
+function syncPalette(){
+  document.getElementById('toolName').textContent=TOOL_NAMES[tool];
+  document.querySelectorAll('.toolopt').forEach(el=>el.classList.add('hidden'));
+  document.getElementById(TOOL_PANELS[tool]).classList.remove('hidden');
+
+  // The selection block only exists when there is a selection to act on.
+  const grp=selGroup(), has=!!selected;
+  document.getElementById('selSec').classList.toggle('hidden',!has);
+  document.getElementById('selDiv').classList.toggle('hidden',!has);
+  document.getElementById('selSlots').classList.toggle('hidden',!has);
+  document.getElementById('selColHead').classList.toggle('hidden',!has);
+
+  syncCopyBtn();
+
+  document.querySelectorAll('.slot').forEach(sl=>{
+    const c=slotColor(sl);
+    const chip=sl.querySelector('.chip');
+    chip.classList.toggle('xnone', c===NONE);
+    chip.style.background = c===NONE ? '#fff' : c;
+    sl.querySelector('.hex').textContent = c===NONE ? 'NONE' : c.toUpperCase();
+  });
+}
+
+/* ------------------------------------------- flip, duplicate, copy, paste */
+/* Mirroring in SCREEN space, not the shape's own axes: mirror . rotate(r)
+   equals rotate(-r) . mirror, so negate the rotation and one scale, then put
+   the centre back where it was. */
+function flipSelected(axis){
+  const grp=selGroup();
+  if(!grp.length) return;
+  pushUndo();
+  // A group mirrors about the GROUP's screen box, so the shapes swap sides as
+  // well as turning over - flipping each about its own centre leaves the
+  // arrangement unmirrored, which does not read as a flip at all.
+  const gb=bbox(grp.flatMap(worldPts));
+  for(const s of grp){
+    // Pin the on-screen bounding box, not the local centre - on a rotated shape
+    // those are different points and only the former leaves the shape looking put.
+    const before=bbox(worldPts(s));
+    s.rot=-s.rot;
+    if(axis==='h') s.sx=-s.sx; else s.sy=-s.sy;
+    const after=bbox(worldPts(s));
+    // where it should land: its own spot, reflected across the group axis
+    const tx = axis==='h' ? 2*gb.cx-before.cx : before.cx;
+    const ty = axis==='v' ? 2*gb.cy-before.cy : before.cy;
+    s.x+=tx-after.cx; s.y+=ty-after.cy;
+  }
+}
+
+let clipboard=null;
+function cloneInto(src,dx,dy){
+  const c=JSON.parse(JSON.stringify(src));
+  c.id=uid++; c.x+=dx; c.y+=dy;
+  views[view].push(c);
+  selected=c; extra=[]; syncPalette();
+  return c;
+}
+function duplicateSelected(){
+  if(!selected) return;
+  pushUndo();
+  const made=selGroup().map(g=>cloneInto(g,24,24));
+  selected=made[0]; extra=made.slice(1); syncPalette();
+}
+function copySelected(){ if(selected) clipboard=JSON.stringify(selected); }
+function pasteClipboard(){
+  if(!clipboard) return;
+  pushUndo();
+  cloneInto(JSON.parse(clipboard),24,24);   // pastes into whichever view is showing
+}
+
+document.getElementById('flipH').addEventListener('click',()=>flipSelected('h'));
+document.getElementById('flipV').addEventListener('click',()=>flipSelected('v'));
+document.getElementById('dupBtn').addEventListener('click',duplicateSelected);
+document.getElementById('delBtn').addEventListener('click',()=>deleteSelected());
+
+/* ------------------------------------------------------- tool option sliders */
+function bindSlider(id,valId,set){
+  const el=document.getElementById(id), out=document.getElementById(valId);
+  const upd=()=>{ set(parseFloat(el.value)); out.textContent=el.value; };
+  el.addEventListener('input',upd); upd();
+}
+bindSlider('optSnap','optSnapv', v=>closeFrac=v/100);
+bindSlider('optSmearR','optSmearRv', v=>smearR=v);
+bindSlider('optEraserR','optEraserRv',v=>eraserR=v);
+bindSlider('optBrushW','optBrushWv', v=>{
+  brushW=v;
+  for(const g of selGroup()) g.lw=v;        // retarget the whole selection too
+});
+
+/* ============================================================== chrome UI */
+function setTool(t){
+  tool=t;
+  document.querySelectorAll('.tool[data-tool]').forEach(b=>b.classList.toggle('active',b.dataset.tool===t));
+  // Selection survives a tool change - that is what lets Smear and Eraser
+  // reach a shape sitting underneath another one.
+  cv.style.cursor = t==='hand' ? 'default' : 'crosshair';
+  syncPalette();
+}
+document.querySelectorAll('.tool[data-tool]').forEach(b=>
+  b.addEventListener('click',()=>setTool(b.dataset.tool)));
+
+function setView(v){
+  view=v; selected=null;
+  document.querySelectorAll('#viewSeg button').forEach(b=>b.classList.toggle('on',b.dataset.view===v));
+  syncPalette();
+}
+document.querySelectorAll('#viewSeg button').forEach(b=>
+  b.addEventListener('click',()=>setView(b.dataset.view)));
+
+document.getElementById('onion').addEventListener('change',e=>onionOn=e.target.checked);
+
+/* ---------------------------------------- copy this view onto the other side */
+const otherView = () => view==='front' ? 'back' : 'front';
+// With a shape selected the button acts on that one shape instead of the view.
+const copySource = () => selected ? selGroup() : views[view];
+const copyLabel  = () => (selected ? (extra.length ? 'Copy '+selGroup().length+' selected to '
+                                                   : 'Copy selected to ') : 'Copy to ') +
+                         (otherView()==='back' ? 'Back' : 'Front');
+function syncCopyBtn(){
+  document.getElementById('btnCopyView').textContent = copyLabel();
+}
+
+function copyViewTo(mode){                  // 'replace' | 'add'
+  const dst=otherView();
+  pushUndo();
+  const clones=copySource().map(s=>{
+    const c=JSON.parse(JSON.stringify(s)); c.id=uid++; return c;
+  });
+  if(mode==='replace') views[dst]=clones; else views[dst].push(...clones);
+}
+
+const modalWrap=document.getElementById('modalWrap');
+let modalOpen=false;
+function closeModal(){ modalOpen=false; modalWrap.classList.add('hidden'); }
+function openCopyModal(){
+  const dst=otherView(), n=views[dst].length, m=copySource().length;
+  document.getElementById('modalTitle').textContent=copyLabel();
+  document.getElementById('modalBody').textContent=
+    'The '+dst+' view already has '+n+(n===1?' shape':' shapes')+'. Replace '+(n===1?'it':'them')+
+    ' with '+(selected?(m>1?'the '+m+' selected shapes':'the selected shape'):'this view')+', or '+
+    (selected&&m===1?'add it on top':'add '+m+' more on top')+'?';
+  modalOpen=true; modalWrap.classList.remove('hidden');
+}
+
+document.getElementById('btnCopyView').addEventListener('click',()=>{
+  if(!copySource().length) return;
+  if(views[otherView()].length) openCopyModal();
+  else copyViewTo('replace');
+});
+document.getElementById('mReplace').addEventListener('click',()=>{ closeModal(); copyViewTo('replace'); });
+document.getElementById('mAdd')    .addEventListener('click',()=>{ closeModal(); copyViewTo('add'); });
+document.getElementById('mCancel') .addEventListener('click',closeModal);
+modalWrap.addEventListener('pointerdown',e=>{ if(e.target===modalWrap) closeModal(); });
+
+function setShading(m){
+  shading=m;
+  document.querySelectorAll('#shadeSeg button').forEach(b=>b.classList.toggle('on',b.dataset.shade===m));
+}
+document.querySelectorAll('#shadeSeg button').forEach(b=>
+  b.addEventListener('click',()=>setShading(b.dataset.shade)));
+
+document.getElementById('btnUndo').addEventListener('click',undo);
+document.getElementById('btnRedo').addEventListener('click',redo);
+
+/* ------------------------------------------------------------ depth order */
+/* Shapes are drawn in array order, so raising one is a swap towards the end of
+   the list. A multi-selection moves as one body: every member hops over the
+   nearest shape that is NOT in the selection, so the group keeps its own
+   internal order and only passes things it is not holding. */
+function canReorder(grp,dir){
+  const list=views[view], inG=new Set(grp);
+  for(let i=0;i<list.length-1;i++){
+    const a=inG.has(list[i]), b=inG.has(list[i+1]);
+    if(dir>0 ? (a&&!b) : (b&&!a)) return true;
+  }
+  return false;
+}
+function reorderSel(dir){
+  const grp=selGroup();
+  if(!grp.length || !canReorder(grp,dir)) return;
+  pushUndo();
+  const list=views[view], inG=new Set(grp);
+  const swap=(i,j)=>{ const t=list[i]; list[i]=list[j]; list[j]=t; };
+  if(dir>0) for(let i=list.length-2;i>=0;i--){ if(inG.has(list[i]) && !inG.has(list[i+1])) swap(i,i+1); }
+  else      for(let i=1;i<list.length;i++){    if(inG.has(list[i]) && !inG.has(list[i-1])) swap(i,i-1); }
+}
+
+function deleteSelected(){
+  if(!selected) return;
+  pushUndo();
+  for(const g of selGroup()){
+    const i=views[view].indexOf(g);
+    if(i>=0) views[view].splice(i,1);
+  }
+  clearSel(); syncPalette();
+}
+document.getElementById('btnDelete').addEventListener('click',deleteSelected);
+
+/* ------------------------------------------------------------- export PNG
+   Renders the current view alone - no paper, no onion skin, no selection
+   chrome - onto the main canvas, resized to exactly the shapes' world bbox,
+   and hands the result over as a download. drawShape only ever paints
+   through the module-level ctx, so the cheapest way to point it somewhere
+   else is to retarget the canvas we already have and put it back after. */
+const EXPORT_SCALE = 2;
+function exportPNG(){
+  const shapes = views[view].filter(s=>s.pts.length>=3);
+  if(!shapes.length) return;
+
+  let x0=1e9,y0=1e9,x1=-1e9,y1=-1e9;
+  for(const s of shapes){
+    const b=bbox(worldPts(s)), pad=s.lw/2+1;   // the outline straddles the path
+    if(b.x0-pad<x0) x0=b.x0-pad;  if(b.y0-pad<y0) y0=b.y0-pad;
+    if(b.x1+pad>x1) x1=b.x1+pad;  if(b.y1+pad>y1) y1=b.y1+pad;
+  }
+  const w=Math.max(1,Math.ceil(x1-x0)), h=Math.max(1,Math.ceil(y1-y0));
+
+
+  cv.width=Math.round(w*EXPORT_SCALE); cv.height=Math.round(h*EXPORT_SCALE);
+  ctx.setTransform(EXPORT_SCALE,0,0,EXPORT_SCALE,-x0*EXPORT_SCALE,-y0*EXPORT_SCALE);
+  ctx.clearRect(x0,y0,w,h);                   // transparent, no paper
+  for(const s of shapes) drawShape(s);
+  const url=cv.toDataURL('image/png');
+
+  // drawShape paints no selection chrome, so nothing needs hiding for the export
+  resize(); render();                         // put the canvas back before the frame lands
+
+  const a=document.createElement('a');
+  a.href=url; a.download='charactersmith-'+view+'.png';
+  a.click();
+}
+document.getElementById('btnExport').addEventListener('click',exportPNG);
+
+window.addEventListener('keydown',e=>{
+  const k=e.key.toLowerCase();
+  if(modalOpen){ if(e.key==='Escape') closeModal(); e.preventDefault(); return; }
+  if(e.ctrlKey||e.metaKey){                 // shortcuts first, so "c" is not a tool key
+    if(k==='z'){ e.preventDefault(); e.shiftKey?redo():undo(); }
+    else if(k==='y'){ e.preventDefault(); redo(); }
+    else if(k==='c'){ e.preventDefault(); copySelected(); }
+    else if(k==='v'){ e.preventDefault(); pasteClipboard(); }
+    else if(k==='d'){ e.preventDefault(); duplicateSelected(); }
+    return;
+  }
+  if(e.target.tagName==='INPUT') return;    // let the sliders keep their arrow keys
+  if(k==='q') setView(view==='front'?'back':'front');
+  else if(e.key==='1') setTool('brush');
+  else if(e.key==='2') setTool('smear');
+  else if(e.key==='3') setTool('eraser');
+  else if(e.key==='4') setTool('hand');
+  else if(k==='h') setShading(shading==='hatch'?'gradient':'hatch');
+  else if(e.key==='Delete'||e.key==='Backspace') deleteSelected();
+  else if(e.key==='ArrowUp'){   e.preventDefault(); reorderSel( 1); }
+  else if(e.key==='ArrowDown'){ e.preventDefault(); reorderSel(-1); }
+});
+
+/* ================================================================== boot */
+resize();
+setTool('brush');
+syncHistory();
+syncPalette();
+render();
+</script>
+</body>
+</html>
