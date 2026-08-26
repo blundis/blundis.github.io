@@ -1780,25 +1780,58 @@ document.getElementById('btnRedo').addEventListener('click',redo);
 
 /* ------------------------------------------------------------ depth order */
 /* Shapes are drawn in array order, so raising one is a swap towards the end of
-   the list. A multi-selection moves as one body: every member hops over the
-   nearest shape that is NOT in the selection, so the group keeps its own
-   internal order and only passes things it is not holding. */
-function canReorder(grp,dir){
-  const list=views[view], inG=new Set(grp);
-  for(let i=0;i<list.length-1;i++){
-    const a=inG.has(list[i]), b=inG.has(list[i+1]);
-    if(dir>0 ? (a&&!b) : (b&&!a)) return true;
-  }
-  return false;
+   the list - but a swap PER SHAPE made this miserable: getting an eye out from
+   under a fringe meant clicking past every unrelated shape in the drawing.
+   There are no layers, and adding them would be a second ordering to keep
+   straight; instead a level is simply "everything that does not overlap". A
+   raise passes every shape the selection does not touch for free and stops on
+   the first one it does, so the click count is the number of shapes actually
+   in front of it - usually one. Nothing left to overlap means it is already on
+   top of everything it could hide behind, and the chevron greys out.
+   Overlap is world bbox against world bbox, the same rough test the lasso uses;
+   the stroke straddles the path, so half an outline width is allowed for. */
+function boxesOverlap(a,b){
+  return a.x1>=b.x0 && b.x1>=a.x0 && a.y1>=b.y0 && b.y1>=a.y0;
 }
+function padBox(s){
+  const b=bbox(worldPts(s)), p=s.lw/2;
+  return {x0:b.x0-p, y0:b.y0-p, x1:b.x1+p, y1:b.y1+p};
+}
+/* Index of the non-member the selection would have to hop next, or -1. The
+   whole selection moves as one body, so the test is against the group's boxes
+   and the scan starts at whichever end of it is nearest the direction of
+   travel - a buried member is reason enough for the group to come forward. */
+function depthTarget(grp,dir){
+  const list=views[view], inG=new Set(grp);
+  const boxes=grp.map(padBox);
+  let lo=-1, hi=-1;
+  for(let i=0;i<list.length;i++) if(inG.has(list[i])){ if(lo<0) lo=i; hi=i; }
+  if(lo<0) return -1;
+  const hits=i => !inG.has(list[i]) && boxes.some(b=>boxesOverlap(b,padBox(list[i])));
+  if(dir>0){ for(let i=lo+1;i<list.length;i++) if(hits(i)) return i; }
+  else     { for(let i=hi-1;i>=0;i--)          if(hits(i)) return i; }
+  return -1;
+}
+function canReorder(grp,dir){ return depthTarget(grp,dir)>=0; }
 function reorderSel(dir){
   const grp=selGroup();
-  if(!grp.length || !canReorder(grp,dir)) return;
+  const t=grp.length ? depthTarget(grp,dir) : -1;
+  if(t<0) return;
   pushUndo();
-  const list=views[view], inG=new Set(grp);
-  const swap=(i,j)=>{ const t=list[i]; list[i]=list[j]; list[j]=t; };
-  if(dir>0) for(let i=list.length-2;i>=0;i--){ if(inG.has(list[i]) && !inG.has(list[i+1])) swap(i,i+1); }
-  else      for(let i=1;i<list.length;i++){    if(inG.has(list[i]) && !inG.has(list[i-1])) swap(i,i-1); }
+  const list=views[view], inG=new Set(grp), mark=list[t];
+  /* Lift the members out and put them back as one block on the far side of the
+     shape they stopped at, so the group stays contiguous and keeps its own
+     internal order. The block also never lands lower than the members already
+     were (nor higher, going down), so a raise cannot drop half the selection
+     behind something it was in front of. Rewritten in place - the array itself
+     is held elsewhere. */
+  let lo=list.length, hi=-1, below=0, above=0;
+  list.forEach((s,i)=>{ if(inG.has(s)){ lo=Math.min(lo,i); hi=i; } });
+  list.forEach((s,i)=>{ if(!inG.has(s)){ if(i<hi) below++; if(i<lo) above++; } });
+  const block=list.filter(s=>inG.has(s)), rest=list.filter(s=>!inG.has(s));
+  const m=rest.indexOf(mark);
+  rest.splice(dir>0 ? Math.max(m+1,below) : Math.min(m,above), 0, ...block);
+  list.length=0; list.push(...rest);
 }
 
 function deleteSelected(){
