@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Charactersmith — 2D Character Prototype</title>
+<title>Drawthing — 2D Character Prototype</title>
 <style>
   :root{
     --chrome:#23201e;
@@ -19,8 +19,11 @@
   body{
     font:13px/1.4 "Segoe UI",system-ui,-apple-system,sans-serif;
     background:var(--chrome);color:var(--ink);
-    display:flex;overflow:hidden;user-select:none;-webkit-user-select:none;
+    display:flex;flex-direction:column;overflow:hidden;user-select:none;-webkit-user-select:none;
   }
+  /* the editor row: toolbar | stage | palette. It is the whole of the body now
+     that the animation bar floats inside the stage rather than sitting under it. */
+  #main{flex:1;display:flex;min-height:0}
 
   /* ---------- left toolbar ---------- */
   #toolbar{
@@ -53,7 +56,8 @@
   canvas{display:block;position:absolute;inset:0;touch-action:none}
   #topbar{
     position:absolute;top:12px;left:50%;transform:translateX(-50%);
-    display:flex;gap:6px;align-items:center;z-index:10;
+    display:flex;gap:6px;align-items:center;justify-content:center;z-index:10;
+    flex-wrap:wrap;max-width:calc(100% - 24px);
     background:rgba(35,32,30,.86);backdrop-filter:blur(6px);
     border:1px solid #171513;border-radius:11px;padding:6px;
   }
@@ -66,6 +70,11 @@
   .seg button .kbd{position:absolute;right:4px;bottom:1px;font-size:9px;font-weight:400;
     letter-spacing:0;color:var(--muted);opacity:.75;line-height:1}
   .seg button.on{background:var(--chrome-3);color:var(--ink)}
+  /* the key badge names how to GET somewhere, so it belongs on the view you are
+     NOT standing on - on the active button it is telling you nothing */
+  .seg button.on .kbd{display:none}
+  /* a sheet has up to six views and their names are long */
+  .seg.compact button{padding:6px 9px;letter-spacing:0}
   .btn{
     border:1px solid #4a4441;background:var(--chrome-3);color:var(--ink);
     padding:6px 11px;border-radius:8px;cursor:pointer;font:inherit;white-space:nowrap;
@@ -73,6 +82,52 @@
   .btn:not(:disabled):hover{background:#4a4441}
   .btn:disabled{opacity:.35;cursor:default}
   .chk{display:flex;align-items:center;gap:6px;color:var(--muted);padding:0 8px;cursor:pointer}
+
+  /* ---------- the animation bar ----------
+     One animation per document. A floating pill at the bottom of the stage,
+     matching #topbar at the top of it: same chrome, same rounding, same blur.
+     It sits INSIDE #stage, so it costs the canvas no height and resize(), the
+     ResizeObserver and the self-heal at the top of render() are untouched. */
+  #animbar{
+    position:absolute;bottom:12px;left:50%;transform:translateX(-50%);
+    display:flex;gap:6px;align-items:center;justify-content:center;z-index:10;
+    flex-wrap:wrap;max-width:calc(100% - 24px);
+    background:rgba(35,32,30,.86);backdrop-filter:blur(6px);
+    border:1px solid #171513;border-radius:11px;padding:6px;
+  }
+  #frames{display:flex;align-items:center;gap:5px;overflow-x:auto;padding:2px;min-width:0;max-width:100%}
+  /* the pill is only as wide as its contents, so there is nothing to push apart */
+  .aspacer{flex:0 0 auto;width:2px}
+  .fchip{
+    flex:0 0 auto;position:relative;width:46px;height:34px;border-radius:7px;
+    border:1px solid #4a4441;background:var(--chrome-3);color:var(--muted);
+    font:inherit;font-size:11px;cursor:pointer;white-space:nowrap;overflow:hidden;
+    padding:0 4px;
+  }
+  .fchip:hover{background:#4a4441}
+  .fchip.on{border-color:var(--accent);color:var(--ink);background:#31405c;font-weight:700}
+  /* a named frame an expression sheet never drew still gets its chip - the frame
+     list has to read straight against the sheet it describes */
+  .fchip.empty{border-style:dashed;opacity:.7}
+  .fchip .fdel{
+    position:absolute;top:0;right:2px;font-size:12px;line-height:1;color:var(--muted);
+    opacity:0;padding:1px 2px;
+  }
+  .fchip:hover .fdel{opacity:.8}
+  .fchip .fdel:hover{color:#f0938c}
+  /* the greyed ghost frame with the + on it: the only way to add one */
+  .fadd{
+    flex:0 0 auto;width:46px;height:34px;border-radius:7px;cursor:pointer;
+    border:1px dashed #4a4441;background:transparent;color:var(--muted);
+    font:inherit;font-size:15px;line-height:1;
+  }
+  .fadd:hover{border-color:var(--accent);color:var(--ink)}
+  #animbar .btn .kbd{font-size:9px;opacity:.7;margin-left:5px}
+  /* An eye or mouth object borrows the bar: its frames are named expressions,
+     so the chips grow to fit the caption and the bar says whose they are. */
+  #frameOwner{flex:0 0 auto;font-size:11px;color:var(--muted);padding:0 2px;max-width:150px;
+    overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .fchip.named{width:auto;min-width:46px;padding:0 9px}
 
   /* ---------- right palette ---------- */
   #palette{
@@ -112,6 +167,47 @@
   }
   .xnone::before{transform:rotate(45deg)}
   .xnone::after{transform:rotate(-45deg)}
+  /* ---------- eyes & mouths library ---------- */
+  #paintPanel,#libPanel{display:flex;flex-direction:column;gap:11px;min-height:0}
+  #libTabs button{flex:1}
+  #libSearch{
+    background:#191716;border:1px solid #4a4441;border-radius:8px;color:var(--ink);
+    font:inherit;padding:7px 9px;outline:none;
+  }
+  #libSearch:focus{border-color:var(--accent)}
+  #libGrid{display:grid;grid-template-columns:1fr 1fr;gap:8px;align-content:start}
+  #libGrid .gthumb{border-radius:9px}
+  #libGrid .gcard.on .gthumb{border-color:var(--accent);box-shadow:0 0 0 2px rgba(110,168,255,.28)}
+  #libNote{color:var(--muted);font-size:11px;line-height:1.5}
+  /* the tag cloud: the five most used tags of whatever tab you are on */
+  #libTags{display:flex;flex-wrap:wrap;gap:4px}
+  .tagbtn{
+    border:1px solid #4a4441;background:#191716;color:var(--muted);
+    border-radius:999px;padding:3px 9px;font:inherit;font-size:11px;cursor:pointer;
+  }
+  .tagbtn:hover{background:#4a4441;color:var(--ink)}
+  .tagbtn.on{background:var(--accent);border-color:var(--accent);color:#12100f;font-weight:600}
+  .gtags{color:var(--muted);font-size:10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  /* the fold: what this drawing already references, and whether it has moved on */
+  #usedList{display:flex;flex-direction:column;gap:6px}
+  .urow{
+    display:flex;gap:8px;align-items:flex-start;cursor:pointer;
+    border:1px solid transparent;border-radius:9px;padding:4px;
+  }
+  .urow:hover{border-color:#4a4441;background:#191716}
+  .urow .gthumb{flex:0 0 52px;width:52px;height:52px;border-radius:8px}
+  .uinfo{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}
+  .utitle{font-size:12px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .uby{color:var(--muted);font-size:10.5px}
+  .ustale{display:flex;align-items:center;gap:6px;color:var(--accent);font-size:11px;font-weight:600;margin-top:2px}
+  .ustale .pbtn{flex:0 0 auto;padding:3px 9px;font-size:11px}
+  /* the pose picker for a single selected reference */
+  #poses{display:flex;flex-wrap:wrap;gap:5px}
+  #poses .pbtn{flex:0 1 auto;padding:6px 9px;font-size:12px}
+  #poses .pbtn.on{background:var(--accent);border-color:var(--accent);color:#12100f;font-weight:600}
+  #poseTitle{font-size:12px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  /* an imported reference owns no colours - the sheet it came from does */
+  .slots.locked{opacity:.3;pointer-events:none}
   .colhead{display:flex;align-items:center;gap:6px}
   .colhead h3{flex:1;min-width:0}
   .colhead h3.right{text-align:right}
@@ -128,7 +224,9 @@
   .slot .hex{font-size:10.5px;color:var(--muted);font-family:ui-monospace,Consolas,monospace}
   /* ---------- modal ---------- */
   #modalWrap{
-    position:fixed;inset:0;z-index:200;display:flex;align-items:center;justify-content:center;
+    /* ABOVE .screen (z-index 300): the gallery's delete prompt and the new-drawing
+       kind picker are both opened from an overlay that would otherwise cover them. */
+    position:fixed;inset:0;z-index:400;display:flex;align-items:center;justify-content:center;
     background:rgba(12,10,9,.55);backdrop-filter:blur(2px);
   }
   #modalCard{
@@ -137,10 +235,127 @@
   }
   #modalCard h2{margin:0 0 8px;font-size:15px;font-weight:700;letter-spacing:.01em}
   #modalCard p{margin:0 0 14px;color:var(--muted);font-size:12px;line-height:1.5}
+  #modalInput{
+    display:block;width:100%;box-sizing:border-box;margin:0 0 14px;
+    background:#191716;border:1px solid #4a4441;border-radius:8px;color:var(--ink);
+    font:inherit;padding:9px 10px;outline:none;
+  }
+  #modalInput:focus{border-color:var(--accent)}
   .mrow{display:flex;gap:7px}
   .mrow .btn{flex:1;padding:8px 6px;font-weight:600}
   .mrow .btn.primary{border-color:var(--accent);background:#31405c;color:#e7efff}
-  .mrow .btn.primary:hover{background:#3b4d70}
+  .mrow .btn.primary:not(:disabled):hover{background:#3b4d70}
+  .mrow .btn.danger{border-color:#a8443e;background:#5c3230;color:#ffe9e7}
+  .mrow .btn.danger:hover{background:#70403c}
+
+  /* ---------- login / gallery screens ----------
+     Both sit OVER the editor rather than hiding it: #stage's ResizeObserver
+     would otherwise measure a zero-width canvas and the drawing would be
+     resized away while the gallery was up. */
+  .screen{position:fixed;inset:0;z-index:300;background:var(--chrome);
+    display:flex;flex-direction:column;overflow:hidden}
+  #loginScreen{align-items:center;justify-content:center}
+  #loginCard{width:320px;background:var(--chrome-2);border:1px solid #171513;border-radius:14px;
+    padding:20px;box-shadow:0 18px 50px rgba(0,0,0,.55);display:flex;flex-direction:column;gap:10px}
+  #loginCard h1{margin:0;font-size:17px;letter-spacing:.02em}
+  #loginCard p{margin:0;color:var(--muted);font-size:12px;line-height:1.5}
+  #loginCard input{
+    background:#191716;border:1px solid #4a4441;border-radius:8px;color:var(--ink);
+    font:inherit;padding:9px 10px;outline:none;
+  }
+  #loginCard input:focus{border-color:var(--accent)}
+  #loginCard input:disabled{opacity:.5}
+  #loginErr{color:#f0938c;font-size:11.5px;min-height:14px}
+  /* The name being signed in to, shown once the flow has moved past it. */
+  #loginWho{margin:0;color:var(--ink);font-size:12.5px}
+  #loginWho b{color:var(--accent);font-weight:600}
+  #loginBack{background:none;border:0;color:var(--muted);font:inherit;font-size:11.5px;
+    text-decoration:underline;cursor:pointer;padding:0;align-self:flex-start}
+  #loginBack:hover{color:var(--ink)}
+
+  #galleryBar{
+    display:flex;align-items:center;gap:10px;padding:12px 16px;
+    background:var(--chrome-2);border-bottom:1px solid #171513;flex:0 0 auto;
+  }
+  #galleryBar h1{margin:0;font-size:14px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted)}
+  #galleryWho{flex:1;min-width:0;color:var(--ink);font-size:12px}
+  #galleryGrid{
+    flex:1;overflow-y:auto;padding:16px;display:grid;gap:14px;align-content:start;
+    grid-template-columns:repeat(auto-fill,minmax(200px,1fr));
+  }
+  .gnote{color:var(--muted);font-size:12px;grid-column:1/-1}
+  .gcard{position:relative;cursor:pointer}
+  .gthumb{
+    aspect-ratio:1;border-radius:12px;background:var(--paper);border:1px solid #171513;
+    display:flex;align-items:center;justify-content:center;overflow:hidden;
+    transition:border-color .12s,transform .08s;position:relative;
+  }
+  .gcard:hover .gthumb{border-color:var(--accent)}
+  .gcard:active .gthumb{transform:scale(.985)}
+  .gthumb img{max-width:88%;max-height:88%;display:block;image-rendering:auto}
+  .gthumb .empty{color:#b6ad9e;font-size:11px}
+  /* the new-canvas tile - first cell of the grid, always */
+  .gcard.new .gthumb{background:#2a2724;border:1px dashed #4a4441;color:var(--muted)}
+  .gcard.new svg{width:34px;height:34px;stroke:currentColor;fill:none;stroke-width:1.6;stroke-linecap:round}
+  .gmeta{margin-top:6px;font-size:11px;color:var(--muted);text-align:center;
+    white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  /* a soft-deleted drawing, admin view only: struck through, never removed */
+  .gcard.deleted .gthumb{opacity:.45}
+  .gcard.deleted .gthumb::after{
+    content:'';position:absolute;inset:0;
+    background:linear-gradient(to bottom right,transparent calc(50% - 1.5px),
+      #e0403a calc(50% - 1.5px),#e0403a calc(50% + 1.5px),transparent calc(50% + 1.5px));
+  }
+  .gcard.deleted .gmeta{color:#b0736e}
+  .gdel{
+    position:absolute;top:7px;right:7px;width:30px;height:30px;border-radius:8px;
+    border:1px solid #171513;background:rgba(24,21,19,.86);color:#f0d6d3;cursor:pointer;
+    display:flex;align-items:center;justify-content:center;opacity:0;transition:opacity .12s,background .12s;
+  }
+  .gdel svg{width:16px;height:16px;stroke:currentColor;fill:none;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
+  .gcard:hover .gdel{opacity:1}
+  .gdel:hover{background:#7a3a35}
+  /* the save button flashes green once the row has landed */
+  #btnSave.ok{background:#2f5c3a;border-color:#4e9c62}
+  /* ...and carries an amber dot for as long as there is work not in the gallery */
+  #btnSave.dirty::after{
+    content:'';position:absolute;right:5px;top:5px;width:7px;height:7px;border-radius:50%;
+    background:#e0a33a;box-shadow:0 0 0 2px var(--chrome-3);
+  }
+  /* published is a state of the drawing, not a tool, so it gets its own tint */
+  #btnPublish.on{background:#2f4a5c;border-color:#4e88c9}
+
+  /* ---------- editing an imported object in place ----------
+     A third floating pill, between the top bar and the animation bar, up only
+     while editStack has something on it. */
+  #editbar{
+    position:absolute;top:12px;left:12px;z-index:11;
+    display:flex;gap:8px;align-items:center;
+    background:rgba(60,44,30,.9);backdrop-filter:blur(6px);
+    border:1px solid #7a5a32;border-radius:11px;padding:6px 6px 6px 11px;
+  }
+  #editWho{font-size:12px;color:var(--ink);white-space:nowrap}
+  #editWho b{color:#e8b877}
+
+  /* ---------- the Make Object dropdown ---------- */
+  #mkObjWrap{position:relative}
+  #mkObjMenu{
+    position:absolute;left:0;right:0;top:calc(100% + 4px);z-index:20;
+    display:flex;flex-direction:column;gap:4px;padding:5px;
+    background:var(--chrome-2);border:1px solid #4a4441;border-radius:9px;
+    box-shadow:0 8px 20px rgba(0,0,0,.45);
+  }
+
+  /* ---------- the metadata box ---------- */
+  #metaSec .mrow2{display:flex;flex-direction:column;gap:3px}
+  #metaSec label.cap{font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted)}
+  #metaSec input[type=text]{
+    background:#191716;border:1px solid #4a4441;border-radius:7px;color:var(--ink);
+    font:inherit;font-size:12px;padding:6px 8px;outline:none;min-width:0;
+  }
+  #metaSec input[type=text]:focus{border-color:var(--accent)}
+  #metaSec input[type=text]:disabled{opacity:.5;cursor:default}
+  #metaFacts{font-size:11px;color:var(--muted);line-height:1.6}
   #ghost{
     position:fixed;width:30px;height:30px;border-radius:8px;pointer-events:none;z-index:999;
     border:2px solid #fff;box-shadow:0 4px 14px rgba(0,0,0,.5);transform:translate(-50%,-50%);display:none;
@@ -149,7 +364,19 @@
 </head>
 <body>
 
+<!-- #main is the editor row; the animation bar sits under it as a real layout
+     row, so #stage genuinely shrinks and resize() needs nothing new. -->
+<div id="main">
 <div id="toolbar">
+  <!-- The gallery is not a tool and must NOT carry data-tool, or setTool's
+       .tool[data-tool] sweep fights it for the active class. -->
+  <button class="tool" id="btnGallery">
+    <svg viewBox="0 0 24 24"><rect x="3.5" y="3.5" width="7" height="7" rx="1.4"/><rect x="13.5" y="3.5" width="7" height="7" rx="1.4"/><rect x="3.5" y="13.5" width="7" height="7" rx="1.4"/><rect x="13.5" y="13.5" width="7" height="7" rx="1.4"/></svg>
+    <span class="tip">Gallery</span>
+  </button>
+
+  <div class="sep"></div>
+
   <div class="logo">TOOLS</div>
 
   <button class="tool active" data-tool="brush">
@@ -181,9 +408,26 @@
 
   <div class="sep"></div>
 
+  <button class="tool" id="btnLibrary">
+    <svg viewBox="0 0 24 24"><path d="M12 6.6v13"/><path d="M12 6.6C10.4 5.2 8.4 4.5 6 4.5H3.2v13H6c2.4 0 4.4.7 6 2.1"/><path d="M12 6.6c1.6-1.4 3.6-2.1 6-2.1h2.8v13H18c-2.4 0-4.4.7-6 2.1"/></svg>
+    <span class="tip">Library</span>
+  </button>
+
+  <div class="sep"></div>
+
   <button class="tool" id="btnExport">
     <svg viewBox="0 0 24 24"><path d="M12 3.5v10.5"/><path d="M8.2 10.2 12 14l3.8-3.8"/><path d="M4.5 15.5V19a1.5 1.5 0 0 0 1.5 1.5h12a1.5 1.5 0 0 0 1.5-1.5v-3.5"/></svg>
     <span class="tip">Export PNG</span>
+  </button>
+
+  <button class="tool" id="btnSave">
+    <svg viewBox="0 0 24 24"><path d="M5 4.5h11L19.5 8v11a1.5 1.5 0 0 1-1.5 1.5H6A1.5 1.5 0 0 1 4.5 19V6A1.5 1.5 0 0 1 6 4.5Z"/><path d="M8 4.5v5h7v-5"/><path d="M8 20v-5.5h8V20"/></svg>
+    <span class="tip" id="saveTip">Save to the gallery</span>
+  </button>
+
+  <button class="tool" id="btnPublish">
+    <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.2"/><path d="M3.8 12h16.4"/><path d="M12 3.8c2.1 2.3 3.2 5 3.2 8.2s-1.1 5.9-3.2 8.2c-2.1-2.3-3.2-5-3.2-8.2S9.9 6.1 12 3.8Z"/></svg>
+    <span class="tip" id="pubTip">Publish so other users can use it</span>
   </button>
 </div>
 
@@ -194,25 +438,40 @@
       <button data-view="front" class="on">Front<span class="kbd">Q</span></button>
       <button data-view="back">Back<span class="kbd">Q</span></button>
     </div>
-    <label class="chk"><input type="checkbox" id="onion" checked> onion</label>
+    <label class="chk" id="onionLbl"><input type="checkbox" id="onion" checked> onion</label>
     <button class="btn" id="btnCopyView">Copy to Back</button>
-    <div class="seg" id="shadeSeg">
-      <button data-shade="gradient">Gradient</button>
-      <button data-shade="hatch" class="on">Hatch</button>
-    </div>
     <button class="btn" id="btnUndo">Undo</button>
     <button class="btn" id="btnRedo">Redo</button>
+  </div>
+
+  <!-- Up only while an imported object is being edited in place. -->
+  <div id="editbar" class="hidden">
+    <div id="editWho"></div>
+    <button class="btn" id="btnEditDone">Done</button>
+    <button class="btn" id="btnEditCancel">Cancel</button>
+  </div>
+
+  <div id="animbar">
+    <span id="frameOwner" class="hidden"></span>
+    <div id="frames"></div>
+    <div class="aspacer"></div>
+    <label class="chk"><input type="checkbox" id="animOnion" checked> onion</label>
+    <button class="btn" id="btnFrameLeft">Copy Left</button>
+    <button class="btn" id="btnFrameRight">Copy Right</button>
+    <button class="btn" id="btnFrameDup">Duplicate</button>
+    <button class="btn" id="btnPlay">Play<span class="kbd">Space</span></button>
+    <button class="btn" id="btnStop">Stop</button>
   </div>
 </div>
 
 <div id="palette">
+ <div id="paintPanel">
   <div class="psec">
     <h3>Tool</h3>
     <div class="toolname" id="toolName">Brush</div>
 
     <div class="psec toolopt" id="optBrush">
       <div class="slider"><span>Outline</span><input type="range" id="optBrushW" min="1" max="12" step="0.5" value="4"><span class="val" id="optBrushWv">4</span></div>
-      <div class="slider"><span>Snap</span><input type="range" id="optSnap" min="4" max="30" value="13"><span class="val" id="optSnapv">13</span></div>
     </div>
 
     <div class="psec toolopt" id="optSmear">
@@ -226,10 +485,19 @@
     <div class="psec toolopt" id="optHand"></div>
   </div>
 
+  <div class="divider" id="poseDiv"></div>
+
+  <div class="psec" id="poseSec">
+    <h3>Frame</h3>
+    <div id="poseTitle"></div>
+    <label class="chk" id="refFollowLbl"><input type="checkbox" id="refFollow"> follow the animation</label>
+    <div id="poses"></div>
+  </div>
+
   <div class="divider" id="selDiv"></div>
 
   <div class="psec" id="selSec">
-    <h3>Selected shape</h3>
+    <h3 id="selHead">Selected shape</h3>
     <div class="prow">
       <button class="pbtn" id="flipH"><svg viewBox="0 0 24 24"><path d="M12 3v18"/><path d="M9 7 4 12l5 5Z"/><path d="m15 7 5 5-5 5Z"/></svg>Flip H</button>
       <button class="pbtn" id="flipV"><svg viewBox="0 0 24 24"><path d="M3 12h18"/><path d="M7 9 12 4l5 5Z"/><path d="m7 15 5 5 5-5Z"/></svg>Flip V</button>
@@ -237,6 +505,17 @@
     <div class="prow">
       <button class="pbtn" id="dupBtn"><svg viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a2 2 0 0 1 2-2h8"/></svg>Duplicate</button>
       <button class="pbtn" id="delBtn"><svg viewBox="0 0 24 24"><path d="M4 7h16"/><path d="M6.5 7 7.4 19a1.5 1.5 0 0 0 1.5 1.4h6.2a1.5 1.5 0 0 0 1.5-1.4L17.5 7"/></svg>Delete</button>
+    </div>
+    <div class="prow" id="editRefRow">
+      <button class="pbtn" id="editRefBtn"><svg viewBox="0 0 24 24"><path d="M4 20h4l10-10a2.1 2.1 0 0 0-3-3L5 17Z"/><path d="M14.5 7.5 16.5 9.5"/></svg>Edit this object</button>
+    </div>
+    <div class="prow" id="mkObjWrap">
+      <button class="pbtn" id="mkObjBtn"><svg viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="2.4"/><path d="M12 8.5v7"/><path d="M8.5 12h7"/></svg>Make Object</button>
+      <div id="mkObjMenu" class="hidden">
+        <button class="pbtn" data-mkobj="eyes">New Eyes</button>
+        <button class="pbtn" data-mkobj="mouths">New Mouth</button>
+        <button class="pbtn" data-mkobj="item">New Item</button>
+      </div>
     </div>
   </div>
 
@@ -261,21 +540,101 @@
       <div class="slot" data-slot="shadow" data-target="sel"><div class="chip"></div><div><div class="lbl">Shadow</div><div class="hex"></div></div></div>
     </div>
   </div>
+
+  <div class="divider"></div>
+
+  <!-- The drawing's own metadata, or a selected reference's. This is what
+       replaced the Tags button in the top bar. -->
+  <div class="psec" id="metaSec">
+    <h3 id="metaHead">Drawing</h3>
+    <div class="mrow2"><label class="cap" for="metaTitle">Name</label>
+      <input id="metaTitle" type="text" placeholder="Untitled" autocomplete="off" spellcheck="false"></div>
+    <div class="mrow2"><label class="cap" for="metaTags">Tags</label>
+      <input id="metaTags" type="text" placeholder="space or comma separated" autocomplete="off" spellcheck="false" list="tagList"></div>
+    <label class="chk" id="metaPubLbl" style="padding:0"><input type="checkbox" id="metaPub"> published</label>
+    <div id="metaFacts"></div>
+  </div>
+ </div>
+
+ <div id="libPanel" class="hidden">
+   <h3>Library</h3>
+   <div class="seg" id="libTabs">
+     <button data-lib="mouths" class="on">Mouths</button>
+     <button data-lib="eyes">Eyes</button>
+     <button data-lib="items">Items</button>
+   </div>
+   <input id="libSearch" type="text" placeholder="search names and tags" autocomplete="off" spellcheck="false">
+   <div id="libTags"></div>
+   <div id="libGrid"></div>
+   <div id="libNote"></div>
+   <div class="divider"></div>
+   <button class="pbtn" id="usedFold">Used in this drawing (0) +</button>
+   <div id="usedList" class="hidden"></div>
+ </div>
 </div>
+</div><!-- /#main -->
 
 <div id="modalWrap" class="hidden">
   <div id="modalCard">
-    <h2 id="modalTitle">Copy to Back</h2>
+    <h2 id="modalTitle"></h2>
     <p id="modalBody"></p>
-    <div class="mrow">
-      <button class="btn primary" id="mReplace">Replace</button>
-      <button class="btn" id="mAdd">Add</button>
-      <button class="btn" id="mCancel">Cancel</button>
-    </div>
+    <input id="modalInput" class="hidden" type="text" autocomplete="off">
+    <input id="modalInput2" class="hidden" type="text" autocomplete="off" list="tagList">
+    <datalist id="tagList"></datalist>
+    <div class="mrow" id="modalBtns"></div>
   </div>
 </div>
 
+<div id="loginScreen" class="screen hidden">
+  <div id="loginCard">
+    <h1>Drawthing</h1>
+    <!-- Two steps: the name, then a password - which one depends on whether the
+         name already exists. #loginStep is 'name' | 'in' | 'up'; everything the
+         current step does not want is hidden, and syncLogin() is the one place
+         that decides. -->
+    <p id="loginIntro">Create account or login to existing.</p>
+    <input id="loginName" type="text" placeholder="username" autocomplete="username"
+           spellcheck="false" autocapitalize="none">
+    <p id="loginWho" class="hidden"></p>
+    <input id="loginPass" class="hidden" type="password" placeholder="password"
+           autocomplete="current-password">
+    <input id="loginPass2" class="hidden" type="password" placeholder="password again"
+           autocomplete="new-password">
+    <div id="loginErr"></div>
+    <button class="btn primary" id="loginGo" style="padding:9px;font-weight:600">Continue</button>
+    <button id="loginBack" class="hidden" type="button">use a different name</button>
+  </div>
+</div>
+
+<div id="galleryScreen" class="screen hidden">
+  <div id="galleryBar">
+    <h1>Gallery</h1>
+    <div id="galleryWho"></div>
+    <button class="btn" id="btnLogout">Log out</button>
+  </div>
+  <div id="galleryGrid"></div>
+</div>
+
 <div id="ghost"></div>
+
+<script type="module">
+/* The Supabase client is the one thing in here that is not hand-written, and it
+   only exists as an ES module - so it loads in a module script of its own and
+   hands the client over on `window`. The main script below stays a CLASSIC
+   script on purpose: every test in CLAUDE.md reaches its top-level consts and
+   functions straight out of javascript_exec, and module scope would hide all of
+   them. The anon/publishable key is meant to be public. */
+const SB_URL = 'https://ryexoswylqmndoobokrg.supabase.co';
+const SB_KEY = 'sb_publishable_yyP5UQsDgR2SUtDUSe9U-w_FCzw_T6a';
+try{
+  const { createClient } = await import('https://esm.sh/@supabase/supabase-js@2');
+  window.sb = createClient(SB_URL, SB_KEY);
+}catch(err){
+  window.sbError = err;                       // offline / file:// - the editor still works
+  console.error('Supabase client failed to load:', err);
+}
+window.dispatchEvent(new Event('sb-ready'));
+</script>
 
 <script>
 /* =========================================================================
@@ -288,12 +647,52 @@ const ctx  = cv.getContext('2d');
 const stage= document.getElementById('stage');
 
 /* ---------------------------------------------------------------- state */
-const views   = { front: [], back: [] };     // two character views
+/* A document is one of four kinds. A character and an item have a front and a
+   back; an eye sheet and a mouth sheet have a single view. EVERY kind has one
+   animation - an ordered list of frames, shared across the views, so front and
+   back always hold the same number of them. For eyes and mouths that frame list
+   is fixed and named (it is what a game swaps at runtime); for a character or
+   an item the user adds frames as they like.
+
+   `ref:true` is what puts a kind in the Library. A character is deliberately
+   left out: nothing stops a character being referenced technically, it is just
+   not offered, to keep the model easy to reason about. */
+const DOC_KINDS = {
+  character:{ label:'Image',  views:[['front','Front'],['back','Back']], frames:'free', ref:false },
+  item:     { label:'Item',   views:[['front','Front'],['back','Back']], frames:'free', ref:true  },
+  eyes:     { label:'Eyes',   views:[['main','Main']], frames:'fixed', ref:true,
+              frameNames:['Normal','Blink','Suspicious','Surprised','Angry','Sad'] },
+  mouths:   { label:'Mouths', views:[['main','Main']], frames:'fixed', ref:true,
+              frameNames:['Closed','Open','Happy','Sad','Screaming'] }
+};
+let   docKind   = 'character';
+let   viewNames = ['front','back'];
+const canImport = () => docKind==='character' || docKind==='item';
+function viewLabel(k){
+  const row=DOC_KINDS[docKind].views.find(v=>v[0]===k);
+  return row ? row[1] : k;
+}
+/* Deliberately still a const, and MUTATED in place when the kind changes - the
+   tests in CLAUDE.md reach top-level consts straight out of javascript_exec.
+
+   views[key] is an ARRAY OF FRAMES, each frame a shape list drawn in array
+   order. views.front[2] is the front view of frame 2. cur() is the current
+   frame of the current view and is what almost everything wants. Indexing is
+   explicit rather than aliased because copyViewTo and restore() both REASSIGN
+   views[n] wholesale, and an alias would silently detach at that point. */
+const views   = { front: [[]], back: [[]] };
 let   view    = 'front';
+let   frame   = 0;
+const frameCount = () => ((views[viewNames[0]]||[]).length)||1;
+const frameKind  = () => (DOC_KINDS[docKind]||DOC_KINDS.character).frames;
+const cur     = () => (views[view]||[])[frame] || [];
+let   playing = false, playTimer = 0;
+const FPS     = 12;
 let   tool    = 'brush';
 let   selected= null;   // the anchor shape - gestures and the sidebar read this one
 let   extra   = [];     // the rest of a multi-selection (box drag / shift-click)
-let   onionOn = true;
+let   onionOn = true;          // ghost the OTHER view (front under back)
+let   onionFrame = true;       // ghost the PREVIOUS frame
 let   shading = 'hatch';      // 'gradient' | 'hatch'
 let   uid     = 1;
 
@@ -303,6 +702,21 @@ const paint = c => c===NONE ? 'rgba(0,0,0,0)' : c;   // for gradient stops
 
 // persistent colour choice - new shapes inherit this
 let current = { outline:'#2E2A28', fill:'#F7C59F', shadow:'#B9713F' };
+
+/* An imported eye or mouth sheet is an ordinary shape carrying a "ref" field.
+   It can be moved, scaled and rotated, but its points, its colours and the
+   carving tools are all off: the sheet it came from is the master copy. The
+   frames themselves live once per document in refLib rather than inside each
+   shape, because snapshot() stringifies every view on every gesture and keeps
+   60 of them in each of two stacks. */
+const editable = s => !s.ref;
+const refLib   = new Map();   // ref.key -> {kind,title,drawingId,rev,tags,author,frameNames,frameCount,views}
+/* An item may import another item, so a reference can nest. drawShape dispatches
+   straight back into drawRefShape for a sub-shape carrying a ref, which is all
+   the recursion needs - except a stop. A cycle IS reachable (item A saved
+   referencing B, then B edited to reference A), so this is a guard, not an
+   assertion. */
+const REF_MAX_DEPTH = 4;
 
 /* The whole selection, anchor first. Every group operation goes through this. */
 const selGroup = () => selected ? [selected].concat(extra) : [];
@@ -328,7 +742,7 @@ const WARP_R   = 90;    // falloff radius (arc-length, local units) for point dr
    distance - a 34px gap was nothing on a small shape (everything closed) and
    a hard target on a big one. The clamps stop it collapsing on scribbles or
    running away on huge strokes. */
-let   closeFrac = 0.13;
+const closeFrac = 0.13;   // not exposed - the default was never worth changing
 const CLOSE_MIN = 9;
 const CLOSE_MAX = 70;
 const MIN_RUN   = 16;   // below this the stroke is a dab, not a loop
@@ -418,6 +832,28 @@ function rdp(pts,eps){
   return pts.filter((_,i)=>keep[i]);
 }
 
+/* RDP measures every point against the chord from the FIRST point to the LAST.
+   On a CLOSED loop those two are neighbours, so that baseline is degenerate and
+   what survives depends on where the stroke happened to start: the same thin
+   sliver kept anywhere from 77% to 94% of its area depending only on the seam,
+   which is what made thin shapes collapse unpredictably rather than always.
+   So split the loop at its two most distant points and simplify the halves as
+   open runs - the baseline is then the shape's own long axis every time. The
+   pair is the usual two-pass approximation of the diameter (furthest from any
+   point, then furthest from that), so it does not depend on the seam either. */
+function rdpLoop(pts,eps){
+  const n=pts.length; if(n<6) return rdp(pts,eps);
+  const farFrom=i=>{ let k=i,best=-1;
+    for(let j=0;j<n;j++){ const d=dist(pts[i],pts[j]); if(d>best){best=d;k=j;} } return k; };
+  let a=farFrom(farFrom(0)), b=farFrom(a);
+  if(a>b){ const t=a; a=b; b=t; }
+  // Degenerate split (the two ends adjacent) leaves nothing to simplify.
+  if(b-a<2 || n-(b-a)<2) return rdp(pts,eps);
+  const A=rdp(pts.slice(a,b+1),eps);                    // a -> b
+  const B=rdp(pts.slice(b).concat(pts.slice(0,a+1)),eps); // b -> a, round the seam
+  return A.slice(0,-1).concat(B.slice(0,-1));           // drop the shared ends
+}
+
 /* Even spacing => predictable dots to drag and clean deformation.
    Open shapes are resampled along the drawn run only, keeping both
    endpoints exact - no points are invented along the closing chord. */
@@ -470,14 +906,33 @@ function resize(){
 window.addEventListener('resize',resize);
 new ResizeObserver(resize).observe(stage);   // palette panel opening changes the stage width
 
+/* The dot grid is ~1,300 dots and it was a beginPath/arc/fill EACH, every frame.
+   The lattice only changes when the stage is resized, so the dots are built once
+   into a single Path2D and drawn with one fill() - 0.92ms -> 0.56ms on an
+   ordinary stage, and pixel-identical to within 1/255 on the dots' own edges.
+
+   A repeating createPattern() tile was tried first and is the obvious answer, but
+   it measured ~2.5ms: one big textured fill is worse here than a heap of tiny
+   arcs, on the software backend and the accelerated one alike. Do not "optimise"
+   this back into a pattern without measuring it. */
+const DOT_STEP=24;
+let dotPath=null, dotKey='';
+function dotGrid(w,h){
+  const key=w+'x'+h;
+  if(dotPath && dotKey===key) return dotPath;
+  const p=new Path2D();
+  for(let y=DOT_STEP/2;y<h;y+=DOT_STEP)
+    for(let x=DOT_STEP/2;x<w;x+=DOT_STEP){
+      p.moveTo(x+1.15,y);                          // or each arc chains onto the last
+      p.arc(x,y,1.15,0,TAU);
+    }
+  dotPath=p; dotKey=key;
+  return p;
+}
 function drawBackground(w,h){
   ctx.fillStyle='#F7F4EE'; ctx.fillRect(0,0,w,h);   // off white paper
-  const step=24;
   ctx.fillStyle='#CFC7B8';                          // darker shade, not black
-  for(let y=step/2;y<h;y+=step)
-    for(let x=step/2;x<w;x+=step){
-      ctx.beginPath(); ctx.arc(x,y,1.15,0,TAU); ctx.fill();
-    }
+  ctx.fill(dotGrid(w,h));
 }
 
 /* The light axis, given as two corners of the shape's box in 0..1 fractions.
@@ -561,7 +1016,50 @@ function hatchShade(b,s){
   ctx.restore();
 }
 
+/* Which frame of a reference to draw. Pinned by default - an eye sheet is a set
+   of expressions a game swaps between, not something that plays on its own - but
+   an instance can be set to FOLLOW, and then it walks in step with whatever
+   frame the parent is showing, wrapping when it is the shorter of the two. */
+function refFrames(lib){ return (lib.views||{})[Object.keys(lib.views||{})[0]] || []; }
+function refFrameIndex(rf,lib,pframe){
+  const frames=refFrames(lib), n=frames.length||1;
+  if(rf.follow) return ((pframe||0)%n+n)%n;
+  return Math.max(0,Math.min(n-1, rf.frame||0));
+}
+
+/* An imported drawing. Draw its frame through the reference's own transform,
+   which makes it a STAMP rather than a re-lit shape: the sub-shapes' light axis
+   and hatch gap are evaluated in the reference's local frame, so rotating one
+   rotates its light with it and scaling one scales its hatch. For a rigid
+   imported asset that is the more predictable of the two - it looks exactly as
+   it was authored.
+
+   An item may import another item, so a sub-shape can itself be a reference and
+   this recurses through drawShape. depth is the only thing stopping it: a cycle
+   is reachable once two items reference each other. */
+function drawRefShape(s,opts){
+  const o = opts||{};
+  const depth = o.depth||0;
+  if(depth>=REF_MAX_DEPTH) return;
+  const lib = refLib.get(s.ref.key);
+  if(!lib) return;
+  const fi = refFrameIndex(s.ref, lib, o.pframe);
+  const fr = refFrames(lib)[fi];
+  if(!fr || !fr.length) return;
+  ctx.save();
+  ctx.translate(s.x,s.y); ctx.rotate(s.rot); ctx.scale(s.sx,s.sy);
+  // opts is forwarded near-verbatim: drawShape ASSIGNS globalAlpha rather than
+  // multiplying it, so an alpha set out here would be thrown away and the
+  // onion skin would draw an imported drawing at full strength. Only depth and
+  // the parent frame change on the way down - a nested reference follows the
+  // frame of the reference holding it, not the document's.
+  const sub = {ghost:o.ghost, depth:depth+1, pframe:fi};
+  for(const x of fr) drawShape(x,sub);
+  ctx.restore();
+}
+
 function drawShape(s,opts){
+  if(s.ref){ drawRefShape(s,opts); return; }
   const ghost = opts && opts.ghost;
   const wp = worldPts(s);
   if(wp.length<3) return;
@@ -685,9 +1183,17 @@ function drawGroupRig(grp){
    world bbox rather than the tilted rig, so "up" is always up on screen even
    when the group rig has been turned right over. */
 const DEPTH_R = 11;
+const HANDLE_R = 11;       // the rotate icon, the largest of the rig handles
 function depthBtns(grp){
   const b=groupBox(grp);
-  const x=b.x1 + (grp.length>1?GRP_PAD:10) + DEPTH_R + 7;
+  /* The rig is drawn in the shapes' OWN axes, so on a rotated shape its corners
+     stand well clear of the axis-aligned bbox - clearing the bbox alone left the
+     arrows sitting under a handle. Measure against the rig's corners as well. */
+  const rig = grp.length>1 ? groupCorners(grp,GRP_PAD)
+                           : localCorners(grp[0]).map(p=>toWorld(grp[0],p));
+  let right = b.x1 + (grp.length>1?GRP_PAD:10);
+  for(const p of rig) right = Math.max(right, p.x + HANDLE_R);
+  const x = right + DEPTH_R + 7;
   return [{x:x, y:b.cy-DEPTH_R-4, dir: 1},
           {x:x, y:b.cy+DEPTH_R+4, dir:-1}];
 }
@@ -709,9 +1215,13 @@ function drawDepthBtns(grp){
   ctx.restore();
 }
 
-/* full=true gives the editable rig (dots + handles). Outside the Hand tool we
-   still outline the selection, because Smear and Eraser now target it. */
-function drawSelection(s,full){
+/* opts.handles gives the corner rig, opts.dots the editable outline points.
+   They are separate because an imported reference gets the handles - it can be
+   moved, scaled and rotated - and never the dots, since its points belong to the
+   sheet. Outside the Hand tool we still outline the selection, because Smear and
+   Eraser target it. */
+function drawSelection(s,opts){
+  const o=opts||{}, full=!!(o.handles||o.dots);
   const c = localCorners(s).map(p=>toWorld(s,p));
 
   ctx.save();
@@ -724,13 +1234,13 @@ function drawSelection(s,full){
 
   if(!full){ ctx.restore(); return; }
 
-  for(const p of worldPts(s)){            // editable outline points
+  if(o.dots) for(const p of worldPts(s)){ // editable outline points
     ctx.beginPath(); ctx.arc(p.x,p.y,3.1,0,TAU);
     ctx.fillStyle='#fff'; ctx.fill();
     ctx.lineWidth=1.3; ctx.strokeStyle='#5b86d6'; ctx.stroke();
   }
 
-  c.forEach(function(p,i){                // corner handles, TR is the rotator
+  if(o.handles) c.forEach(function(p,i){   // corner handles, TR is the rotator
     if(i===1){ drawRotateIcon(p.x,p.y); return; }
     ctx.beginPath(); ctx.arc(p.x,p.y,6.5,0,TAU);
     ctx.fillStyle='#fff'; ctx.fill();
@@ -739,17 +1249,26 @@ function drawSelection(s,full){
   ctx.restore();
 }
 
-function render(){
+function drawFrame(){
   // self-heal the backing size: the palette panel opening changes the stage width
   if(stage.clientWidth!==Math.round(cv.width/dpr) || stage.clientHeight!==Math.round(cv.height/dpr)) resize();
   const w=cv.width/dpr, h=cv.height/dpr;
   drawBackground(w,h);
 
-  if(onionOn){
-    const other = view==='front' ? views.back : views.front;
-    for(const s of other) drawShape(s,{ghost:true});
+  syncChrome();
+  drawEditBackdrop();
+
+  /* Two onions, and they are independent. The VIEW onion is how you trace a
+     back view against the front - the first view, unless you are standing on
+     it, then the second. The FRAME onion is how you draw the next step of an
+     animation against the last one. Frame 0 has nothing behind it. */
+  if(onionOn && viewNames.length>1){
+    const ok = view===viewNames[0] ? viewNames[1] : viewNames[0];
+    for(const s of (views[ok]||[])[frame]||[]) drawShape(s,{ghost:true});
   }
-  for(const s of views[view]) drawShape(s);
+  if(onionFrame && frame>0)
+    for(const s of (views[view]||[])[frame-1]||[]) drawShape(s,{ghost:true});
+  for(const s of cur()) drawShape(s,{pframe:frame});
 
   if(drawing && drawing.pts.length>1){       // live brush stroke
     ctx.save();
@@ -789,8 +1308,9 @@ function render(){
   // One shape gets the editable rig; a group gets a faint box per shape plus
   // one rig round the lot, since resize and rotate now take the whole group.
   // Warping is still the anchor shape's alone, so the dots stay single-shape.
-  const grp=selGroup();
-  for(const g of grp) drawSelection(g, tool==='hand' && grp.length===1);
+  const grp=playing ? [] : selGroup();
+  const solo = tool==='hand' && grp.length===1;
+  for(const g of grp) drawSelection(g, solo ? {handles:true, dots:editable(g)} : null);
   if(grp.length>1 && tool==='hand') drawGroupRig(grp);
   if(grp.length && tool==='hand') drawDepthBtns(grp);
 
@@ -814,29 +1334,62 @@ function render(){
     ctx.restore();
   }
 
-  requestAnimationFrame(render);
 }
+
+/* ONE driver, and one only.
+
+   The body above used to be render() itself and used to end by re-scheduling
+   ITSELF - and render() is also called directly from twenty-odd places (the
+   frame chips, Q/E, Tab, undo, save, the Library...). Every one of those calls
+   therefore left another self-perpetuating loop running for the life of the
+   page: they were only ever added, never removed. Ten frame-steps meant eleven
+   full redraws of the whole document per animation frame, forever, idle or not,
+   and a normal session reached several hundred. It read as a memory problem
+   because each loop re-allocates a worldPts array and a fresh CanvasGradient
+   per shape per frame, so the GC churn multiplied with it.
+
+   So: drawFrame() is the body, render() only draws, and startRenderLoop() -
+   called once, at boot - is the only thing that ever schedules. Every existing
+   render() call site keeps working and now costs exactly one extra frame. */
+function render(){ drawFrame(); }
+function startRenderLoop(){ (function loop(){ drawFrame(); requestAnimationFrame(loop); })(); }
 
 /* ======================================================= undo / redo stacks */
 const undoStack=[], redoStack=[];
+/* Whether the document has moved on since the last save or load. Set by
+   pushUndo - every edit goes through it - and cleared by a save, a load and a
+   new scene. guardUnsaved() further down is what asks about it. */
+let dirty=false;
 function snapshot(){
-  return JSON.stringify({front:views.front, back:views.back, view:view,
-                         sel:selGroup().map(g=>g.id)});
+  const v={};
+  for(const n of viewNames) v[n]=views[n]||[];
+  // Every FRAME of every view, so adding, duplicating and deleting a frame are
+  // all ordinary undoable edits with nothing extra to write.
+  // refLib is NOT in here: a load clears the stacks, so the view names cannot
+  // change under a snapshot, and an entry orphaned by undoing an import is
+  // inert. That is also why an Update keys a NEW refLib entry and repoints the
+  // shapes at it rather than mutating the entry in place - the repointing lives
+  // in the shapes, so it lands in here for free.
+  return JSON.stringify({views:v, view:view, frame:frame, sel:selGroup().map(g=>g.id)});
 }
 function restore(str){
   const snap=JSON.parse(str);
-  views.front=snap.front; views.back=snap.back;
+  for(const n of viewNames) views[n]=snap.views[n]||[[]];
+  frame=Math.max(0,Math.min(frameCount()-1, snap.frame||0));
   setView(snap.view);
+  syncFrames();
   const ids=snap.sel||[];
-  const back=ids.map(id=>views[view].find(s=>s.id===id)).filter(Boolean);
+  const back=ids.map(id=>cur().find(s=>s.id===id)).filter(Boolean);
   selected=back[0]||null; extra=back.slice(1);
   syncPalette();
 }
 function syncHistory(){
   document.getElementById('btnUndo').disabled = !undoStack.length;
   document.getElementById('btnRedo').disabled = !redoStack.length;
+  syncChrome();
 }
 function pushUndo(){
+  dirty=true;                               // every edit lands here, so this is the one place
   undoStack.push(snapshot());
   if(undoStack.length>60) undoStack.shift();
   redoStack.length=0;                       // a fresh edit forks history, redo is gone
@@ -844,12 +1397,14 @@ function pushUndo(){
 }
 function undo(){
   if(!undoStack.length) return;
+  dirty=true;                               // stepping back is still a difference from the row
   redoStack.push(snapshot());
   restore(undoStack.pop());
   syncHistory();
 }
 function redo(){
   if(!redoStack.length) return;
+  dirty=true;
   undoStack.push(snapshot());
   restore(redoStack.pop());
   syncHistory();
@@ -861,7 +1416,7 @@ function redo(){
    handle and has no middle left to grab. */
 function pickR(minDim, full){ return Math.max(3, Math.min(full, minDim*0.25)); }
 function shapeAt(w){
-  const list=views[view];
+  const list=cur();
   for(let i=list.length-1;i>=0;i--){
     buildFill(ctx, worldPts(list[i]), list[i].closed!==false);   // click the fill, chord included
     if(ctx.isPointInPath(w.x,w.y)) return list[i];
@@ -869,8 +1424,9 @@ function shapeAt(w){
   return null;
 }
 function outlineNear(w,tol){
-  const list=views[view];
+  const list=cur();
   for(let i=list.length-1;i>=0;i--){
+    if(!editable(list[i])) continue;      // a reference has no outline to carve; look under it
     for(const p of worldPts(list[i])) if(dist(p,w)<tol) return list[i];
   }
   return null;
@@ -883,8 +1439,14 @@ function pos(e){
 }
 
 cv.addEventListener('pointerdown',e=>{
+  // While it is playing the canvas is a viewer, not an editor: the frame under
+  // the cursor changes twelve times a second, so any gesture would land on
+  // whichever frame happened to be up when you let go.
+  if(playing) return;
   cv.setPointerCapture(e.pointerId);
   const w=pos(e); mouse.down=true; mouse.x=w.x; mouse.y=w.y;
+  // Back to the paint sidebar: a click on the canvas is the end of a pick.
+  if(closeLibrary()) syncPalette();
 
   if(tool==='brush'){
     drawing={pts:[w], len:0};
@@ -972,15 +1534,18 @@ cv.addEventListener('pointerdown',e=>{
       }
     }
 
-    // 2. outline points -> soft warp
-    const wp=worldPts(selected);
-    const wR=pickR(minDim,10);
-    for(let i=0;i<wp.length;i++){
-      if(dist(wp[i],w)<wR){
-        pushUndo();
-        gesture={mode:'warp', weights:warpWeights(selected.pts,i,selected.closed!==false),
-                 last:toLocal(selected,w)};
-        return;
+    // 2. outline points -> soft warp. Never on a reference: those points are the
+    //    sheet's, and the corner handles above stay live so it can still be placed.
+    if(editable(selected)){
+      const wp=worldPts(selected);
+      const wR=pickR(minDim,10);
+      for(let i=0;i<wp.length;i++){
+        if(dist(wp[i],w)<wR){
+          pushUndo();
+          gesture={mode:'warp', weights:warpWeights(selected.pts,i,selected.closed!==false),
+                   last:toLocal(selected,w)};
+          return;
+        }
       }
     }
   }
@@ -1099,7 +1664,7 @@ function finishMarquee(){
   const x0=Math.min(marquee.x0,marquee.x1), x1=Math.max(marquee.x0,marquee.x1);
   const y0=Math.min(marquee.y0,marquee.y1), y1=Math.max(marquee.y0,marquee.y1);
   if(x1-x0<4 && y1-y0<4) return;                  // that was a click, not a box
-  const hit=views[view].filter(sh=>{
+  const hit=cur().filter(sh=>{
     const b=bbox(worldPts(sh));
     return b.x1>=x0 && b.x0<=x1 && b.y1>=y0 && b.y0<=y1;
   });
@@ -1135,10 +1700,22 @@ function finishBrush(raw){
   const closed = runLen>MIN_RUN &&
                  dist(raw[0], raw[raw.length-1]) < closeThresholdFor(runLen);
 
-  let pts = rdp(raw, 1.6);                       // kill jitter
-  // Point spacing scales with the stroke too. A flat 12px left a small shape
-  // with three points, which the guard below then threw away entirely.
-  const step = Math.max(3, Math.min(12, runLen/14));
+  let pts = closed ? rdpLoop(raw, 1.6) : rdp(raw, 1.6);   // kill jitter
+  /* Point spacing scales with the stroke too. A flat 12px left a small shape
+     with three points, which the guard below then threw away entirely.
+     But runLen is the PERIMETER, and on a thin curvy shape that is a measure of
+     how far the hand travelled, not of how big the thing is: a ribbon runs out
+     along one side and back along the other, so a 60px curl has a ~290px outline.
+     runLen/14 read that as a big stroke, sampled it at 12px, and left the curl
+     with 24 points - few enough that the smoothing pass below flattened it into
+     a bean. Measured, the deformation was a near-constant ~8px whatever the size,
+     so it was invisible on a large shape and ate a small one. Capping the spacing
+     against the bbox as well keeps a small curly shape densely enough sampled to
+     survive the smoothing: worst-case deviation 28% of the shape's size -> 8.5%,
+     for ~14% more points. A round or blobby shape is untouched - its perimeter is
+     only ~3x its size, so runLen/14 is already the smaller of the two. */
+  const rb = bbox(raw);
+  const step = Math.max(2, Math.min(12, runLen/14, Math.max(rb.w, rb.h)/12));
   pts = resample(pts, step, closed);
   if(pts.length<5) return;
   pts = laplacian(pts, 0.35, 2, closed);         // gentle confidence pass
@@ -1152,7 +1729,7 @@ function finishBrush(raw){
     x:b.cx, y:b.cy, rot:0, sx:1, sy:1, lw:brushW, closed:closed,
     colors:{ outline:current.outline, fill:current.fill, shadow:current.shadow }
   };
-  views[view].push(shape);
+  cur().push(shape);
 }
 
 /* ====================================================== smear and eraser */
@@ -1169,6 +1746,11 @@ function tryCarve(w){
     let group;
     if(selected)  group = carve.mode==='smear' ? selGroup() : [selected];
     else { const s = outlineNear(w,R); group = s ? [s] : []; }
+    // An imported reference cannot be carved. Dropping it from the group must not
+    // leave the tool dead everywhere - a selection claims the tool outright, so a
+    // refs-only selection would otherwise stop the stroke doing anything at all.
+    group = group.filter(editable);
+    if(!group.length){ const s = outlineNear(w,R); group = s ? [s] : []; }
     if(!group.some(g=>pointsInRange(g,w,R))) return;
     pushUndo();                       // only once we are actually going to change something
     carve.shapes=group; carve.locked=true;
@@ -1204,7 +1786,7 @@ function eraseAt(s,w){
 
   const run=longestRun(keep, s.closed!==false);
   if(!run || run.len<4){                        // nothing worth keeping - bin it
-    const list=views[view], i=list.indexOf(s);
+    const list=cur(), i=list.indexOf(s);
     if(i>=0) list.splice(i,1);
     if(inSel(s)){ dropFromSel(s); syncPalette(); }
     carve.shapes=carve.shapes.filter(g=>g!==s);
@@ -1604,15 +2186,107 @@ function slotColor(sl){
   return (sl.dataset.target==='sel' && selected ? selected.colors : current)[sl.dataset.slot];
 }
 function applyColor(which,hex,target){
-  pushUndo();
-  if(target==='sel'){ for(const g of selGroup()) g.colors[which]=hex; }
-  else current[which]=hex;
+  if(target==='sel'){
+    // A reference keeps the sheet's colours. Filter per shape so a mixed
+    // selection still recolours the rest, and do not push an undo for a no-op.
+    const hit=selGroup().filter(editable);
+    if(!hit.length) return;
+    pushUndo();
+    for(const g of hit) g.colors[which]=hex;
+  }else{
+    pushUndo();
+    current[which]=hex;
+  }
   syncPalette();
 }
 
 const TOOL_NAMES={brush:'Brush', smear:'Smear', eraser:'Eraser', hand:'Hand of Judgement'};
 const TOOL_PANELS={brush:'optBrush', smear:'optSmear', eraser:'optEraser', hand:'optHand'};
+let paletteMode='paint';       // 'paint' | 'library' - the sidebar swaps wholesale
 
+/* The library is a picker, not a mode to live in: touching the canvas or
+   reaching for a tool means you are done with it, so it drops back to the
+   paint sidebar. Returns whether it actually closed, so the caller can decide
+   whether it still owes a syncPalette. */
+function closeLibrary(){
+  if(paletteMode!=='library') return false;
+  paletteMode='paint';
+  return true;
+}
+
+/* An eye or mouth object's frames are named expressions, and the animation bar
+   at the bottom of the stage is already a row of named frames - so for exactly
+   ONE selected reference to a fixed-frame kind the bar stands in for that
+   object and the sidebar picker goes away. A group has nothing coherent to
+   list, so it keeps the document's own frames and the ordinary behaviour. */
+function refFrameTarget(){
+  const grp=selGroup();
+  const s = grp.length===1 && grp[0].ref ? grp[0] : null;
+  if(!s || !(DOC_KINDS[s.ref.kind]||{}).frameNames) return null;
+  const lib=refLib.get(s.ref.key);
+  const frames = lib ? refFrames(lib) : [];
+  return frames.length>1 ? {s:s, lib:lib, frames:frames} : null;
+}
+function refFrameLabel(lib,i){
+  const names=lib.frameNames || (DOC_KINDS[lib.kind]||{}).frameNames || null;
+  return names ? (names[i]||String(i)) : String(i);
+}
+
+/* The frame picker for an imported drawing. It only appears for a selection of
+   exactly ONE reference: the frames on offer are that drawing's own, and a mixed
+   group would have nothing coherent to list. Both settings live in the shape, so
+   snapshot() already carries them and undo works without anything extra. */
+function syncPoses(){
+  const grp=selGroup();
+  const s = grp.length===1 && grp[0].ref ? grp[0] : null;
+  const lib = s && refLib.get(s.ref.key);
+  const frames = lib ? refFrames(lib) : [];
+  // ...unless the animation bar is showing them instead - see refFrameTarget.
+  const show = !!(lib && frames.length>1) && !refFrameTarget();
+  document.getElementById('poseSec').classList.toggle('hidden',!show);
+  document.getElementById('poseDiv').classList.toggle('hidden',!show);
+  const box=document.getElementById('poses');
+  if(!show){ box.innerHTML=''; return; }
+
+  document.getElementById('poseTitle').textContent=
+    (DOC_KINDS[s.ref.kind]||{label:s.ref.kind}).label+' - '+(s.ref.title||'Untitled');
+
+  /* A sheet's frames are named expressions a game picks between, not steps of an
+     animation to run alongside the parent, so following has nothing to mean for
+     one and the checkbox goes away. */
+  document.getElementById('refFollowLbl').classList.toggle('hidden',
+    !!(DOC_KINDS[s.ref.kind]||{}).frameNames);
+  const follow=document.getElementById('refFollow');
+  follow.checked=!!s.ref.follow;
+  follow.onchange=()=>setRefFollow(s, follow.checked);
+
+  const names=lib.frameNames||null;
+  const at=refFrameIndex(s.ref, lib, frame);
+  box.innerHTML='';
+  for(let i=0;i<frames.length;i++){
+    const b=document.createElement('button');
+    b.className='pbtn'+(i===at?' on':'');
+    b.textContent=names ? (names[i]||String(i)) : String(i);
+    /* An empty frame is one the drawing's author never made - offer it greyed
+       rather than hiding it, so the frame list still reads straight against the
+       drawing it came from. Following disables the lot: the parent picks. */
+    b.disabled = s.ref.follow || !(frames[i] && frames[i].length);
+    b.addEventListener('click',()=>setRefFrame(s,i));
+    box.appendChild(b);
+  }
+}
+function setRefFrame(s,i){
+  if(!s.ref || s.ref.frame===i) return;
+  pushUndo();
+  s.ref.frame=i;
+  syncPoses(); syncFrames(); render();
+}
+function setRefFollow(s,on){
+  if(!s.ref || !!s.ref.follow===!!on) return;
+  pushUndo();
+  s.ref.follow=!!on;
+  syncPoses(); syncFrames(); render();
+}
 /* The sidebar is always open now - it just changes what it offers. */
 function syncPalette(){
   document.getElementById('toolName').textContent=TOOL_NAMES[tool];
@@ -1622,11 +2296,30 @@ function syncPalette(){
   // The selection block only exists when there is a selection to act on.
   const grp=selGroup(), has=!!selected;
   document.getElementById('selSec').classList.toggle('hidden',!has);
+  document.getElementById('selHead').textContent = grp.length>1 ? 'Selected shapes' : 'Selected shape';
   document.getElementById('selDiv').classList.toggle('hidden',!has);
   document.getElementById('selSlots').classList.toggle('hidden',!has);
   document.getElementById('selColHead').classList.toggle('hidden',!has);
+  // Nothing in the selection can take a colour: the column stays put but goes inert.
+  document.getElementById('selSlots').classList.toggle('locked', has && !grp.some(editable));
 
+  syncPoses();
+  syncFrames();   // the selection decides whose frames the bar is showing
   syncCopyBtn();
+
+  /* Make Object promotes the selection into a drawing of its own, so it only
+     makes sense where a reference can live - and Edit only for a lone reference
+     whose drawing is yours. */
+  const one = grp.length===1 ? grp[0] : null;
+  document.getElementById('mkObjWrap').classList.toggle('hidden', !(has && canImport()));
+  /* A lone reference already IS an object - promoting it would only wrap it in a
+     second one, so the button goes inert rather than away. */
+  const mkDead = !!(one && one.ref);
+  document.getElementById('mkObjBtn').disabled = mkDead;
+  if(mkDead) closeMkObjMenu();
+  document.getElementById('editRefRow').classList.toggle('hidden', !(one && one.ref && canEditRef(one)));
+  if(!has) closeMkObjMenu();
+  syncMeta();
 
   document.querySelectorAll('.slot').forEach(sl=>{
     const c=slotColor(sl);
@@ -1635,6 +2328,16 @@ function syncPalette(){
     chip.style.background = c===NONE ? '#fff' : c;
     sl.querySelector('.hex').textContent = c===NONE ? 'NONE' : c.toUpperCase();
   });
+
+  /* Last, so it wins over everything the per-tool block above just un-hid: the
+     library is a mode for the whole panel, and it only exists on a character. */
+  const onChar = canImport();
+  const lib = paletteMode==='library' && onChar;
+  const btn = document.getElementById('btnLibrary');
+  btn.classList.toggle('hidden',!onChar);
+  btn.classList.toggle('active',lib);
+  document.getElementById('paintPanel').classList.toggle('hidden', lib);
+  document.getElementById('libPanel')  .classList.toggle('hidden',!lib);
 }
 
 /* ------------------------------------------- flip, duplicate, copy, paste */
@@ -1667,7 +2370,7 @@ let clipboard=null;
 function cloneInto(src,dx,dy){
   const c=JSON.parse(JSON.stringify(src));
   c.id=uid++; c.x+=dx; c.y+=dy;
-  views[view].push(c);
+  cur().push(c);
   selected=c; extra=[]; syncPalette();
   return c;
 }
@@ -1677,11 +2380,19 @@ function duplicateSelected(){
   const made=selGroup().map(g=>cloneInto(g,24,24));
   selected=made[0]; extra=made.slice(1); syncPalette();
 }
-function copySelected(){ if(selected) clipboard=JSON.stringify(selected); }
+// The clipboard holds the WHOLE selection, as an array — copying a group and
+// getting one shape back was a bug. Old single-shape payloads are wrapped.
+function copySelected(){ if(selected) clipboard=JSON.stringify(selGroup()); }
 function pasteClipboard(){
   if(!clipboard) return;
+  const raw=JSON.parse(clipboard), all=Array.isArray(raw)?raw:[raw];
+  // Only a kind that may import can hold a reference at all - an eye sheet with
+  // a mouth pasted into it would be a reference nobody could have created.
+  const cs=all.filter(c=>!(c.ref && !canImport()));
+  if(!cs.length) return;
   pushUndo();
-  cloneInto(JSON.parse(clipboard),24,24);   // pastes into whichever view is showing
+  const made=cs.map(c=>cloneInto(c,24,24));  // pastes into whichever view is showing
+  selected=made[0]; extra=made.slice(1); syncPalette();
 }
 
 document.getElementById('flipH').addEventListener('click',()=>flipSelected('h'));
@@ -1695,17 +2406,17 @@ function bindSlider(id,valId,set){
   const upd=()=>{ set(parseFloat(el.value)); out.textContent=el.value; };
   el.addEventListener('input',upd); upd();
 }
-bindSlider('optSnap','optSnapv', v=>closeFrac=v/100);
 bindSlider('optSmearR','optSmearRv', v=>smearR=v);
 bindSlider('optEraserR','optEraserRv',v=>eraserR=v);
 bindSlider('optBrushW','optBrushWv', v=>{
   brushW=v;
-  for(const g of selGroup()) g.lw=v;        // retarget the whole selection too
+  for(const g of selGroup()) if(editable(g)) g.lw=v;   // retarget the whole selection too
 });
 
 /* ============================================================== chrome UI */
 function setTool(t){
   tool=t;
+  closeLibrary();
   document.querySelectorAll('.tool[data-tool]').forEach(b=>b.classList.toggle('active',b.dataset.tool===t));
   // Selection survives a tool change - that is what lets Smear and Eraser
   // reach a shape sitting underneath another one.
@@ -1715,65 +2426,333 @@ function setTool(t){
 document.querySelectorAll('.tool[data-tool]').forEach(b=>
   b.addEventListener('click',()=>setTool(b.dataset.tool)));
 
+/* Rebuild the view switch for a document kind. The key swap and the setView
+   that follows MUST run synchronously with nothing awaited in between:
+   the render loop is always in flight, so one frame landing on a view key that
+   no longer exists throws and the canvas is dead until reload. */
+function setViewNames(kind, nFrames){
+  docKind = DOC_KINDS[kind] ? kind : 'character';
+  const rows = DOC_KINDS[docKind].views;
+  const fixed= DOC_KINDS[docKind].frameNames;
+  viewNames = rows.map(r=>r[0]);
+  // A fixed-frame kind always has exactly its named frames; a free one starts
+  // with a single empty frame unless a scene is telling us how many it has.
+  const n = fixed ? fixed.length : Math.max(1, nFrames||1);
+  for(const k of Object.keys(views)) delete views[k];
+  for(const v of viewNames){ views[v]=[]; for(let i=0;i<n;i++) views[v].push([]); }
+  frame = 0;
+  const seg=document.getElementById('viewSeg');
+  // A sheet has one view, so there is nothing to switch between and the whole
+  // segment goes away rather than sitting there as a single dead button.
+  seg.classList.toggle('hidden', viewNames.length<2);
+  seg.classList.toggle('compact', viewNames.length>2);
+  seg.textContent='';
+  for(const row of rows){
+    const b=document.createElement('button');
+    b.dataset.view=row[0]; b.textContent=row[1];
+    if(viewNames.length>1){            // Tab is the view switch; Q/E belong to the frames
+      const k=document.createElement('span'); k.className='kbd'; k.textContent='Tab';
+      b.appendChild(k);
+    }
+    seg.appendChild(b);
+  }
+  view = viewNames[0];
+  clearSel();
+}
+
+/* The frame name shown on a chip: a sheet's frames are the expressions a game
+   will swap between and are named; a character's or an item's are just steps. */
+function frameLabel(i){
+  const fixed=(DOC_KINDS[docKind]||{}).frameNames;
+  return fixed ? (fixed[i]||String(i)) : String(i);
+}
 function setView(v){
-  view=v; selected=null;
+  if(viewNames.indexOf(v)<0) v=viewNames[0];
+  // clearSel, not selected=null: "extra" left holding shapes from the view you
+  // just left makes a later shift-click build a selection spanning two views.
+  view=v; clearSel(); gRot=0; gRotKey='';
   document.querySelectorAll('#viewSeg button').forEach(b=>b.classList.toggle('on',b.dataset.view===v));
   syncPalette();
 }
-document.querySelectorAll('#viewSeg button').forEach(b=>
-  b.addEventListener('click',()=>setView(b.dataset.view)));
+const stepView = d => setView(viewNames[viewNames.indexOf(view)+d] || view);
+const toggleView = () => { if(viewNames.length>1) setView(view===viewNames[0]?viewNames[1]:viewNames[0]); };
+
+/* ------------------------------------------------------------- the frames
+   One animation per document, shared across the views: front and back always
+   hold the same number of frames, so a walk cycle's two sides stay in step and
+   the frame index means the same thing whichever view you are standing in. */
+function setFrame(i){
+  const n=frameCount();
+  const f=Math.max(0,Math.min(n-1,i));
+  if(f===frame){ syncFrames(); return; }
+  frame=f;
+  // clearSel for the same reason setView does it: the shapes of the frame you
+  // just left must not stay in "extra" and get lassoed together with new ones.
+  clearSel(); gRot=0; gRotKey='';
+  syncFrames(); syncPalette();
+}
+const stepFrame = d => {
+  /* While the bar is standing in for a selected eye or mouth object, the keys
+     that step the chips have to step ITS frames - stepping the document's would
+     move something the bar is not showing (and clear the selection with it). */
+  const rt=refFrameTarget();
+  if(rt){
+    if(rt.s.ref.follow) return;
+    const n=rt.frames.length;
+    setRefFrame(rt.s, ((refFrameIndex(rt.s.ref,rt.lib,frame)+d)%n+n)%n);
+    return;
+  }
+  setFrame(frame+d);
+};
+
+/* Playback only moves the index. It must NOT go through setFrame: clearing the
+   selection and rebuilding the sidebar twelve times a second is both wasteful
+   and visibly destructive. */
+function frameTick(){
+  const n=frameCount();
+  frame=(frame+1)%n;
+  syncFrames();
+}
+function playAnim(){
+  if(playing) return;
+  if(frameCount()<2) return;
+  playing=true; clearSel();
+  playTimer=setInterval(frameTick, Math.round(1000/FPS));
+  syncFrames(); syncPalette();
+}
+function pauseAnim(){
+  if(!playing) return;
+  playing=false; clearInterval(playTimer); playTimer=0;
+  syncFrames(); syncPalette();
+}
+const togglePlay = () => playing ? pauseAnim() : playAnim();
+function stopAnim(){
+  pauseAnim();
+  setFrame(0);
+}
+
+function reidClone(list){
+  const c=JSON.parse(JSON.stringify(list));
+  for(const s of c) s.id=uid++;      // ids are unique within a scene, never shared
+  return c;
+}
+const framesLocked = () => frameKind()==='fixed';
+function addFrame(){
+  if(framesLocked()) return;
+  pushUndo();
+  for(const n of viewNames) views[n].splice(frame+1,0,[]);
+  setFrame(frame+1); render();
+}
+function dupFrame(){
+  if(framesLocked()) return;
+  pushUndo();
+  for(const n of viewNames) views[n].splice(frame+1,0,reidClone(views[n][frame]||[]));
+  setFrame(frame+1); render();
+}
+function delFrame(i){
+  if(framesLocked() || frameCount()<2) return;
+  pushUndo();
+  for(const n of viewNames) views[n].splice(i,1);
+  setFrame(Math.min(i, frameCount()-1)); render();
+}
+/* Copy this view's current frame onto its neighbour. Same Replace / Add / Cancel
+   question the view copy asks, and the same clone-with-fresh-ids rule. */
+function copyFrameTo(mode,dst){
+  pushUndo();
+  const clones=reidClone(selected ? selGroup() : cur());
+  if(mode==='replace') views[view][dst]=clones; else views[view][dst].push(...clones);
+  setFrame(dst); render();
+}
+/* The keys are named in one place so the chips' tooltips can never drift from
+   what the keyboard handler actually does. */
+const KEY_PREV='Q', KEY_NEXT='E';
+
+function syncFrames(){
+  const box=document.getElementById('frames');
+  /* With one eye or mouth object selected the bar lists ITS frames instead of
+     the document's, and every button that edits the document's frames goes
+     inert - the chips are not describing them. */
+  const rt=refFrameTarget();
+  const dn=frameCount();
+  const n = rt ? rt.frames.length : dn, free = !rt && !framesLocked();
+  const at = rt ? refFrameIndex(rt.s.ref, rt.lib, frame) : frame;
+  const owner=document.getElementById('frameOwner');
+  owner.classList.toggle('hidden',!rt);
+  owner.textContent = rt ? (rt.s.ref.title||'Untitled') : '';
+  box.textContent='';
+  for(let i=0;i<n;i++){
+    const b=document.createElement('button');
+    const label = rt ? refFrameLabel(rt.lib,i) : frameLabel(i);
+    const empty = rt ? !((rt.frames[i]||[]).length)
+                     : !viewNames.some(v=>((views[v]||[])[i]||[]).length);
+    b.className='fchip'+(i===at?' on':'')+(empty?' empty':'')+(rt?' named':'');
+    b.textContent=label;
+    b.title = i===at-1 ? 'Previous frame ('+KEY_PREV+')'
+            : i===at+1 ? 'Next frame ('+KEY_NEXT+')'
+            : 'Frame '+label;
+    if(rt){
+      /* A frame the object's author never drew is offered greyed rather than
+         hidden, so the list still reads straight against the sheet. Follow
+         disables the lot: the parent picks. */
+      b.disabled = !!rt.s.ref.follow || empty;
+      b.addEventListener('click',()=>setRefFrame(rt.s,i));
+    }else
+    b.addEventListener('click',()=>{ pauseAnim(); setFrame(i); render(); });
+    if(free && n>1){
+      const x=document.createElement('span');
+      x.className='fdel'; x.textContent='x'; x.title='Delete this frame';
+      x.addEventListener('click',e=>{ e.stopPropagation(); pauseAnim(); delFrame(i); });
+      b.appendChild(x);
+    }
+    box.appendChild(b);
+  }
+  if(free){
+    const add=document.createElement('button');
+    add.className='fadd'; add.textContent='+'; add.title='Add a frame after this one';
+    add.addEventListener('click',()=>{ pauseAnim(); addFrame(); });
+    box.appendChild(add);
+  }
+  const play=document.getElementById('btnPlay');
+  play.firstChild.nodeValue = playing ? 'Pause' : 'Play';
+  play.disabled = dn<2 || !!rt;
+  document.getElementById('btnStop').disabled = dn<2 || !!rt;
+  document.getElementById('btnFrameDup').classList.toggle('hidden', !free);
+  document.getElementById('btnFrameLeft') .disabled = !!rt || frame<=0;
+  document.getElementById('btnFrameRight').disabled = !!rt || frame>=dn-1;
+  document.getElementById('btnFrameLeft') .title = !rt && frame>0    ? 'Copy onto frame '+frameLabel(frame-1) : '';
+  document.getElementById('btnFrameRight').title = !rt && frame<dn-1 ? 'Copy onto frame '+frameLabel(frame+1) : '';
+}
+
+function doCopyFrameTo(dst){
+  if(dst==null || dst<0 || dst>=frameCount()) return;
+  const src=selected ? selGroup() : cur();
+  if(!src.length) return;
+  if((views[view][dst]||[]).length){
+    openModal({
+      title:'Copy to frame '+frameLabel(dst),
+      body:'Frame '+frameLabel(dst)+' already has '+views[view][dst].length+
+           ' shape'+(views[view][dst].length===1?'':'s')+'.',
+      buttons:[{label:'Replace',primary:true,onClick:()=>copyFrameTo('replace',dst)},
+               {label:'Add',                onClick:()=>copyFrameTo('add',dst)},
+               {label:'Cancel'}]});
+  }else copyFrameTo('replace',dst);
+}
+/* Delegated - the buttons are rebuilt whenever the document kind changes, so
+   listeners bound to the buttons themselves would not survive. */
+document.getElementById('viewSeg').addEventListener('click',e=>{
+  const b=e.target.closest('button');
+  if(b && b.dataset.view) setView(b.dataset.view);
+});
 
 document.getElementById('onion').addEventListener('change',e=>onionOn=e.target.checked);
+document.getElementById('animOnion').addEventListener('change',e=>onionFrame=e.target.checked);
+document.getElementById('btnFrameLeft') .addEventListener('click',()=>doCopyFrameTo(frame-1));
+document.getElementById('btnFrameRight').addEventListener('click',()=>doCopyFrameTo(frame+1));
+document.getElementById('btnFrameDup')  .addEventListener('click',dupFrame);
+document.getElementById('btnPlay')      .addEventListener('click',togglePlay);
+document.getElementById('btnStop')      .addEventListener('click',()=>{ stopAnim(); render(); });
 
-/* ---------------------------------------- copy this view onto the other side */
-const otherView = () => view==='front' ? 'back' : 'front';
+/* ------------------------------------------ copy this view onto another one
+   Copying between VIEWS always stays on the current frame - front and back of
+   the same moment. Copying between FRAMES is the animation bar's Copy Left /
+   Copy Right, and stays in the current view. */
+const otherView     = () => view===viewNames[0] ? viewNames[1] : viewNames[0];
 // With a shape selected the button acts on that one shape instead of the view.
-const copySource = () => selected ? selGroup() : views[view];
-const copyLabel  = () => (selected ? (extra.length ? 'Copy '+selGroup().length+' selected to '
-                                                   : 'Copy selected to ') : 'Copy to ') +
-                         (otherView()==='back' ? 'Back' : 'Front');
+const copySource = () => selected ? selGroup() : cur();
+const copyLabel  = dst => (selected ? (extra.length ? 'Copy '+selGroup().length+' selected to '
+                                                    : 'Copy selected to ') : 'Copy to ') +
+                          viewLabel(dst);
 function syncCopyBtn(){
-  document.getElementById('btnCopyView').textContent = copyLabel();
+  const one=document.getElementById('btnCopyView');
+  const two=viewNames.length>1;
+  one.classList.toggle('hidden', !two);
+  // the view onion ghosts the OTHER view, so with one view it has nothing to show
+  document.getElementById('onionLbl').classList.toggle('hidden', !two);
+  if(two) one.textContent=copyLabel(otherView());
 }
 
-function copyViewTo(mode){                  // 'replace' | 'add'
-  const dst=otherView();
+function copyViewTo(mode,dst){              // 'replace' | 'add'
+  if(!dst) return;
   pushUndo();
-  const clones=copySource().map(s=>{
-    const c=JSON.parse(JSON.stringify(s)); c.id=uid++; return c;
-  });
-  if(mode==='replace') views[dst]=clones; else views[dst].push(...clones);
+  const clones=reidClone(copySource());
+  if(mode==='replace') views[dst][frame]=clones; else views[dst][frame].push(...clones);
 }
 
+/* One modal, built from a description - the copy prompt was the only caller
+   until the gallery needed a delete confirmation. modalOpen matters: the
+   keydown handler swallows everything while it is set, so a modal that skips
+   it would leak 1-4 and Q through to the editor underneath. */
 const modalWrap=document.getElementById('modalWrap');
+const modalBtns=document.getElementById('modalBtns');
 let modalOpen=false;
 function closeModal(){ modalOpen=false; modalWrap.classList.add('hidden'); }
-function openCopyModal(){
-  const dst=otherView(), n=views[dst].length, m=copySource().length;
-  document.getElementById('modalTitle').textContent=copyLabel();
-  document.getElementById('modalBody').textContent=
-    'The '+dst+' view already has '+n+(n===1?' shape':' shapes')+'. Replace '+(n===1?'it':'them')+
-    ' with '+(selected?(m>1?'the '+m+' selected shapes':'the selected shape'):'this view')+', or '+
-    (selected&&m===1?'add it on top':'add '+m+' more on top')+'?';
+function openModal(o){
+  document.getElementById('modalTitle').textContent=o.title||'';
+  const bodyEl=document.getElementById('modalBody');
+  bodyEl.textContent=o.body ||'';
+  bodyEl.classList.toggle('hidden', !o.body);
+  /* Up to two optional text fields. onClick is handed both values, so a caller
+     that wants a name typed in does not have to reach for the element. Only the
+     FIRST one gates the primary button - the second is always optional. */
+  const inp =document.getElementById('modalInput');
+  const inp2=document.getElementById('modalInput2');
+  inp .classList.toggle('hidden', !o.input);
+  inp2.classList.toggle('hidden', !o.input2);
+  inp .placeholder=(o.input  && o.input .placeholder)||''; inp .value=(o.input  && o.input .value)||'';
+  inp2.placeholder=(o.input2 && o.input2.placeholder)||''; inp2.value=(o.input2 && o.input2.value)||'';
+  modalBtns.innerHTML='';
+  let fire=null, primaryEl=null;
+  for(const b of o.buttons){
+    const el=document.createElement('button');
+    el.className='btn'+(b.primary?' primary':'')+(b.danger?' danger':'');
+    el.textContent=b.label;
+    const go=()=>{ if(el.disabled) return; const v=inp.value, v2=inp2.value;
+                   closeModal(); if(b.onClick) b.onClick(v,v2); };
+    if(b.primary){ fire=go; primaryEl=el; }
+    el.addEventListener('click',go);
+    modalBtns.appendChild(el);
+  }
   modalOpen=true; modalWrap.classList.remove('hidden');
+  /* With a field in the card the primary button is what commits it, so it stays
+     disabled until there is something to commit - a blank name is not a name. */
+  const syncPrimary=()=>{ if(primaryEl) primaryEl.disabled = !inp.value.trim(); };
+  const onEnter = e=>{ if(e.key==='Enter'&&fire){ e.preventDefault(); fire(); } };
+  inp .oninput  = o.input ? syncPrimary : null;
+  inp .onkeydown = o.input  ? onEnter : null;
+  inp2.onkeydown = o.input2 ? onEnter : null;
+  if(o.input){ syncPrimary(); setTimeout(()=>{ inp.focus(); inp.select(); },0); }
 }
+function openCopyModal(dst){
+  const n=(views[dst][frame]||[]).length, m=copySource().length;
+  openModal({
+    title: copyLabel(dst),
+    body: 'The '+viewLabel(dst)+' view already has '+n+(n===1?' shape':' shapes')+'. Replace '+(n===1?'it':'them')+
+      ' with '+(selected?(m>1?'the '+m+' selected shapes':'the selected shape'):'this view')+', or '+
+      (selected&&m===1?'add it on top':'add '+m+' more on top')+'?',
+    buttons:[
+      {label:'Replace', primary:true, onClick:()=>copyViewTo('replace',dst)},
+      {label:'Add',                   onClick:()=>copyViewTo('add',dst)},
+      {label:'Cancel'}
+    ]
+  });
+}
+function doCopyTo(dst){
+  if(!dst || !copySource().length) return;
+  if((views[dst][frame]||[]).length) openCopyModal(dst);
+  else copyViewTo('replace',dst);
+}
+document.getElementById('btnCopyView') .addEventListener('click',()=>doCopyTo(otherView()));
 
-document.getElementById('btnCopyView').addEventListener('click',()=>{
-  if(!copySource().length) return;
-  if(views[otherView()].length) openCopyModal();
-  else copyViewTo('replace');
-});
-document.getElementById('mReplace').addEventListener('click',()=>{ closeModal(); copyViewTo('replace'); });
-document.getElementById('mAdd')    .addEventListener('click',()=>{ closeModal(); copyViewTo('add'); });
-document.getElementById('mCancel') .addEventListener('click',closeModal);
 modalWrap.addEventListener('pointerdown',e=>{ if(e.target===modalWrap) closeModal(); });
 
+/* The Gradient/Hatch segment has been taken out of the top bar - hatch is the
+   default and the choice was clutter. The mechanism is all still here, reachable
+   from the h key and carried in the scene's render block, so putting the switch
+   back is markup and nothing else. */
 function setShading(m){
   shading=m;
   document.querySelectorAll('#shadeSeg button').forEach(b=>b.classList.toggle('on',b.dataset.shade===m));
 }
-document.querySelectorAll('#shadeSeg button').forEach(b=>
-  b.addEventListener('click',()=>setShading(b.dataset.shade)));
 
 document.getElementById('btnUndo').addEventListener('click',undo);
 document.getElementById('btnRedo').addEventListener('click',redo);
@@ -1802,7 +2781,7 @@ function padBox(s){
    and the scan starts at whichever end of it is nearest the direction of
    travel - a buried member is reason enough for the group to come forward. */
 function depthTarget(grp,dir){
-  const list=views[view], inG=new Set(grp);
+  const list=cur(), inG=new Set(grp);
   const boxes=grp.map(padBox);
   let lo=-1, hi=-1;
   for(let i=0;i<list.length;i++) if(inG.has(list[i])){ if(lo<0) lo=i; hi=i; }
@@ -1818,7 +2797,7 @@ function reorderSel(dir){
   const t=grp.length ? depthTarget(grp,dir) : -1;
   if(t<0) return;
   pushUndo();
-  const list=views[view], inG=new Set(grp), mark=list[t];
+  const list=cur(), inG=new Set(grp), mark=list[t];
   /* Lift the members out and put them back as one block on the far side of the
      shape they stopped at, so the group stays contiguous and keeps its own
      internal order. The block also never lands lower than the members already
@@ -1838,8 +2817,8 @@ function deleteSelected(){
   if(!selected) return;
   pushUndo();
   for(const g of selGroup()){
-    const i=views[view].indexOf(g);
-    if(i>=0) views[view].splice(i,1);
+    const i=cur().indexOf(g);
+    if(i>=0) cur().splice(i,1);
   }
   clearSel(); syncPalette();
 }
@@ -1852,9 +2831,20 @@ document.getElementById('btnDelete').addEventListener('click',deleteSelected);
    through the module-level ctx, so the cheapest way to point it somewhere
    else is to retarget the canvas we already have and put it back after. */
 const EXPORT_SCALE = 2;
-function exportPNG(){
-  const shapes = views[view].filter(s=>s.pts.length>=3);
-  if(!shapes.length) return;
+
+/* Draws one frame of one view alone, cropped to its shapes, and hands back a
+   data URL. opts: {scale} outright, or {maxDim} to fit the longest side (never
+   past 2x - a thumbnail of a tiny drawing has nothing to gain from being blown
+   up), and {frame} for which frame (default the current one).
+   Everything here is synchronous, so the swapped-out canvas never reaches a
+   frame; returns null when the frame is empty. */
+function renderViewToDataURL(vName, opts){
+  const fi = (opts && opts.frame!=null) ? opts.frame : frame;
+  /* {shapes} draws that list instead of a view's frame - Make Object wants a
+     thumbnail of just the selection, which is not a frame of anything yet. */
+  const from = (opts && opts.shapes) || ((views[vName]||[])[fi]||[]);
+  const shapes = from.filter(s=>s.pts.length>=3);
+  if(!shapes.length) return null;
 
   let x0=1e9,y0=1e9,x1=-1e9,y1=-1e9;
   for(const s of shapes){
@@ -1864,26 +2854,1583 @@ function exportPNG(){
   }
   const w=Math.max(1,Math.ceil(x1-x0)), h=Math.max(1,Math.ceil(y1-y0));
 
+  const o = opts||{};
+  const scale = o.maxDim ? Math.min(2, o.maxDim/Math.max(w,h)) : (o.scale||1);
 
-  cv.width=Math.round(w*EXPORT_SCALE); cv.height=Math.round(h*EXPORT_SCALE);
-  ctx.setTransform(EXPORT_SCALE,0,0,EXPORT_SCALE,-x0*EXPORT_SCALE,-y0*EXPORT_SCALE);
+  cv.width=Math.max(1,Math.round(w*scale)); cv.height=Math.max(1,Math.round(h*scale));
+  ctx.setTransform(scale,0,0,scale,-x0*scale,-y0*scale);
   ctx.clearRect(x0,y0,w,h);                   // transparent, no paper
-  for(const s of shapes) drawShape(s);
+  for(const s of shapes) drawShape(s,{pframe:fi});
   const url=cv.toDataURL('image/png');
 
   // drawShape paints no selection chrome, so nothing needs hiding for the export
   resize(); render();                         // put the canvas back before the frame lands
+  return url;
+}
 
+function exportPNG(){
+  const url = renderViewToDataURL(view,{scale:EXPORT_SCALE});
+  if(!url) return;
   const a=document.createElement('a');
-  a.href=url; a.download='charactersmith-'+view+'.png';
+  a.href=url; a.download='drawthing-'+view+'-'+frame+'.png';
   a.click();
 }
 document.getElementById('btnExport').addEventListener('click',exportPNG);
 
+/* ==================================================== the scene format (v1)
+   What gets stored, and what a game that does not exist yet will have to read.
+   It is deliberately a superset of the undo snapshot: that one only ever has to
+   survive a round trip inside a running editor, so it can lean on every global
+   staying put. A saved scene cannot, so it also carries
+
+     - the stage size the coordinates were authored against. World units are CSS
+       pixels and there is no camera, so without this the numbers have no scale.
+     - the lighting and hatch parameters, which live in module consts and are the
+       whole of how a shape is shaded.
+     - a version, because this format WILL change. `format` identifies it,
+       `version` gates it, and migrateScene is the seam later versions step
+       through.
+
+   The `editor` block is convenience only - a game ignores it.
+
+   v2 added three things on top of v1, which knew only a character's two views:
+
+     - `kind`: the document kind.
+     - `viewOrder`: the view keys in order.
+     - `refs`: sheets imported into a character.
+
+   v3 is the generalisation of all that. There are four kinds now, and every one
+   of them animates:
+
+     - `views[key]` is an ARRAY OF FRAMES, each frame a shape list. Every view
+       holds the same number of frames - one animation per document, not one per
+       view - so views.front[2] and views.back[2] are two sides of one moment.
+       v2's per-expression views of an eye or mouth sheet became exactly this:
+       one view, one frame per expression.
+     - `frameNames`: the frame labels for a kind whose frames are fixed (eyes,
+       mouths), or null when they are just numbered steps.
+     - `frameCount`: how many, so a reader does not have to trust the arrays.
+     - `render.fps`: how fast the editor played it back.
+     - `refs` entries hold the same shape as a document - `views`, `frameNames`,
+       `frameCount` - plus the `tags` and `author` the Library shows, and their
+       OWN `refs`, because an item may import another item.
+     - a shape's `ref` carries `frame` (which frame of the reference to draw)
+       and `follow` (draw whatever frame the parent is on instead, wrapping).
+
+   Shape fields (see also the table in CLAUDE.md): pts are LOCAL, centred on the
+   shape's own bbox centre at creation; x/y/rot/sx/sy place them (sx/sy may be
+   negative - that is how a flip is stored); lw straddles the path, so bounds
+   need lw/2; closed:false means the outline is stroked only along the drawn run
+   while the fill still closes with a straight chord; a colour of "none" means
+   do not render that part at all. */
+const SCENE_FORMAT  = 'charactersmith.scene';
+const SCENE_VERSION = 3;
+
+function sceneToJSON(){
+  const r = cv.getBoundingClientRect();
+  const vs={};
+  for(const n of viewNames) vs[n]=JSON.parse(JSON.stringify(views[n]||[]));
+  // Only the references the document still uses: an import that has since been
+  // undone or deleted leaves an entry behind in refLib, and there is no reason
+  // to carry it into the row. Transitive, because an item can hold references
+  // of its own and dropping those would leave a hole in the middle of one.
+  const refs={};
+  for(const k of usedRefKeys()) if(refLib.has(k)) refs[k]=refLib.get(k);
+  return {
+    format: SCENE_FORMAT,
+    version: SCENE_VERSION,
+    createdWith: 'charactersmith-proto',
+    kind: docKind,                            // 'character' | 'item' | 'eyes' | 'mouths'
+    canvas: { width:Math.round(r.width), height:Math.round(r.height) },
+    viewOrder: viewNames.slice(),
+    frameNames: (DOC_KINDS[docKind].frameNames||null),
+    frameCount: frameCount(),
+    views: vs,                                // views[key][frame]; array order IS draw order
+    refs: refs,                               // imported drawings, one entry each
+    render: {
+      shading: shading,                       // 'hatch' | 'gradient'
+      light: { from:{x:LIGHT_FROM.x,y:LIGHT_FROM.y}, to:{x:LIGHT_TO.x,y:LIGHT_TO.y},
+               terminator:TERMINATOR, softness:SOFTNESS, dist:LIGHT_DIST },
+      hatch: { gap:HATCH_GAP, weight:HATCH_WEIGHT, angleDeg:45 },
+      fps: FPS
+    },
+    editor: {
+      activeView: view,
+      activeFrame: frame,
+      defaultColors: { outline:current.outline, fill:current.fill, shadow:current.shadow },
+      brushW: brushW
+    }
+  };
+}
+
+function migrateScene(o){
+  if(!o || o.format!==SCENE_FORMAT) throw new Error('Not a Drawthing scene.');
+  if(o.version>SCENE_VERSION)
+    throw new Error('This scene is version '+o.version+', the editor only reads up to '+SCENE_VERSION+'.');
+  if(o.version<2){                            // v1 knew only the two character views
+    o.kind='character';
+    o.viewOrder=['front','back'];
+    o.refs={};
+    o.version=2;
+  }
+  if(o.version<3){
+    /* v2's views held shape lists. v3's hold frames. For a character that is a
+       wrap - one frame, the drawing as it was. For an eye or a mouth sheet the
+       expression VIEWS were the frames all along, so they fold into one view in
+       the order the sheet declared them, and their old view labels become the
+       frame names. */
+    const order=(o.viewOrder||[]).slice();
+    const src=o.views||{};
+    if(o.kind==='eyes' || o.kind==='mouths'){
+      o.frameNames=(DOC_KINDS[o.kind].frameNames||order).slice();
+      o.views={ main: order.map(n=>src[n]||[]) };
+      o.viewOrder=['main'];
+      o.frameOrderV2=order;                   // so a v2 ref.pose can still be resolved
+    }else{
+      o.frameNames=null;
+      o.views={};
+      for(const n of order) o.views[n]=[ src[n]||[] ];
+    }
+    o.frameCount=Math.max(1, (o.views[o.viewOrder[0]]||[]).length);
+    const rf=o.refs||{};
+    for(const k of Object.keys(rf)) rf[k]=migrateRefEntry(rf[k]);
+    // and every shape's ref.pose (a name) becomes ref.frame (an index)
+    for(const n of o.viewOrder) for(const fr of o.views[n]||[]) for(const s of fr||[])
+      if(s && s.ref) migrateRefField(s.ref, rf[s.ref.key]);
+    (o.render||(o.render={})).fps=FPS;
+    o.version=3;
+  }
+  return o;
+}
+
+/* A v2 refs entry was {frameOrder:[name], frames:{name:[shape]}} - one sheet,
+   one expression per key. In v3 it is shaped like a document: one view holding
+   an array of frames, in the sheet's own order. */
+function migrateRefEntry(e){
+  if(!e || e.views) return e;                 // already v3
+  const order=(e.frameOrder||[]).slice();
+  return { kind:e.kind, title:e.title, drawingId:e.drawingId, rev:e.rev,
+           tags:e.tags||[], author:e.author||'',
+           frameNames:order, frameCount:Math.max(1,order.length),
+           views:{ main: order.map(n=>(e.frames||{})[n]||[]) },
+           refs:{} };
+}
+function migrateRefField(rf,entry){
+  if(rf.frame!=null) return;                  // already v3
+  const order=(entry && entry.frameNames) || [];
+  const i=order.indexOf(rf.pose);
+  rf.frame = i>=0 ? i : 0;
+  rf.follow = false;
+  delete rf.pose;
+}
+
+/* Every refLib key the document actually reaches, references inside references
+   included. Seeded from the shapes, then walked through each entry's own
+   shapes - an item that imports an item would otherwise lose the inner one. */
+function usedRefKeys(src){
+  const vs = src || views, names = src ? Object.keys(src) : viewNames;
+  const seen=new Set(), queue=[];
+  const scan=list=>{ for(const s of list||[]) if(s && s.ref && !seen.has(s.ref.key)){
+                       seen.add(s.ref.key); queue.push(s.ref.key); } };
+  for(const n of names) for(const fr of vs[n]||[]) scan(fr);
+  while(queue.length){
+    const e=refLib.get(queue.pop());
+    if(!e) continue;
+    for(const vn of Object.keys(e.views||{})) for(const fr of e.views[vn]||[]) scan(fr);
+  }
+  return seen;
+}
+
+function sceneFromJSON(raw){
+  const o = migrateScene(typeof raw==='string' ? JSON.parse(raw) : raw);
+
+  /* Order matters: the kind decides the view KEYS, and they have to exist before
+     anything is assigned into them or read back out of them. A key the scene
+     declares but does not carry simply comes back empty. */
+  const kind = DOC_KINDS[o.kind] ? o.kind : 'character';
+  const src  = o.views || {};
+  const nF   = Math.max(1, o.frameCount || (src[(o.viewOrder||[])[0]]||[]).length || 1);
+  setViewNames(kind, nF);
+  /* Every view carries the same number of frames, so a view the scene declares
+     but does not carry - or carries short - is padded rather than left ragged;
+     views[n][frame] must never be undefined or the render loop dies. */
+  const n2 = frameCount();
+  for(const n of viewNames){
+    const got = src[n] || [];
+    views[n] = [];
+    for(let i=0;i<n2;i++) views[n].push(got[i] || []);
+  }
+
+  refLib.clear();
+  const rf = o.refs || {};
+  for(const k of Object.keys(rf)) refLib.set(k, rf[k]);
+
+  /* ids are only unique WITHIN a scene, so the counter has to be pushed past
+     every one of them - otherwise the next brush stroke gets an id a loaded
+     shape already holds, and everything that resolves a shape by id (undo,
+     copy-to-the-other-view) picks the wrong one.
+     Deliberately NOT walking into the refs' own shapes: nothing ever resolves
+     one by id, their ids came from a different scene, and the import strips
+     them anyway. */
+  let mx=0;
+  for(const v of viewNames) for(const fr of views[v]) for(const s of fr) if(s.id>mx) mx=s.id;
+  uid = mx+1;
+
+  const ed=o.editor||{}, rn=o.render||{};
+  if(ed.defaultColors) current={ outline:ed.defaultColors.outline, fill:ed.defaultColors.fill,
+                                 shadow:ed.defaultColors.shadow };
+  if(ed.brushW){
+    brushW=ed.brushW;
+    const el=document.getElementById('optBrushW');
+    el.value=ed.brushW; document.getElementById('optBrushWv').textContent=ed.brushW;
+  }
+  pauseAnim();
+  clearSel();
+  paletteMode='paint';
+  setShading(rn.shading==='gradient'?'gradient':'hatch');
+  frame=Math.max(0,Math.min(frameCount()-1, ed.activeFrame||0));
+  setView(viewNames.indexOf(ed.activeView)>=0 ? ed.activeView : viewNames[0]);
+  syncFrames();
+  undoStack.length=0; redoStack.length=0;   // a load is not an edit to undo
+  dirty=false;
+  syncHistory(); syncPalette(); render();
+}
+
+function newScene(kind){
+  pauseAnim();
+  setViewNames(kind||'character');            // empties and re-keys views, rebuilds the switch
+  refLib.clear();
+  uid=1; clearSel(); paletteMode='paint';
+  currentDrawingId=null; currentDrawingTitle=null; currentDrawingRev=0;
+  currentDrawingTags=[]; currentDrawingPublished=false;
+  undoStack.length=0; redoStack.length=0;
+  dirty=false;
+  syncHistory(); setView(viewNames[0]); syncFrames(); syncPalette(); render();
+}
+
+/* ================================================= supabase / session / gallery
+   Login is a username and a password, backed by Supabase Auth. The account's
+   email address is DERIVED from the username - 'bob' signs in as
+   bob@example.com - so the user never sees an email field and no mail is ever
+   sent (see userEmail for why that domain and not a fake one). cs_users.id IS
+   the auth user id, which is what lets RLS key on auth.uid(): see the note at
+   the top of supabase/schema.sql. `session` keeps the same
+   {id, username, is_admin} shape it always had, so everything downstream of
+   here is unchanged. */
+let sb = null;
+/* The login form stays disabled until this turns true - a submit against a
+   client that has not arrived yet half-runs the flow. */
+let sbLoaded = false;
+const sbReady = new Promise(res=>{
+  const land=()=>{ sb=window.sb||null; sbLoaded=!!sb; res(); };
+  if(window.sb!==undefined || window.sbError) land();
+  else window.addEventListener('sb-ready',land,{once:true});
+});
+async function db(){
+  await sbReady;
+  if(!sb) throw new Error('Supabase client did not load (offline, or the page was opened off the filesystem).');
+  return sb;
+}
+
+let session=null;                 // {id, username, is_admin}; id is the auth user id
+let currentDrawingId=null;        // the row Save updates; null means Save inserts
+let currentDrawingTitle=null;     // null means Save has to ask for a name first
+let currentDrawingRev=0;          // the row's rev, stamped into any reference to it
+let currentDrawingTags=[];        // freeform, lower-case, whatever the Library searches on
+let currentDrawingPublished=false;// private until published; only published rows reach other users
+let uiScreen='draw';              // 'draw' | 'login' | 'gallery'
+
+/* The username has to survive being turned into an email local part, and the
+   mapping has to be injective or two names land on one account. Hence the
+   format, which is checked here and again by a constraint on the column.
+
+   The domain is example.com because **GoTrue rejects an address whose domain
+   does not resolve**. charactersmith.invalid was the obvious choice - .invalid
+   is RFC 2606 reserved precisely so it can never reach an inbox - and signUp
+   turns it down flat: 'Email address is invalid'. Every other reserved fake
+   (.test, .example, a made-up .app) has no DNS either and fails the same way.
+   example.com is the one address space that is BOTH reserved for ever - RFC
+   2606 again, run by IANA, not registrable by anybody - AND real enough in DNS
+   to satisfy the validator. Do not "tidy" this into a prettier domain that
+   somebody could come to own. */
+const NAME_RE=/^[a-z0-9_-]{2,24}$/;
+const MIN_PASS=8;                 // matches the dashboard's minimum
+const userEmail=name=>name.toLowerCase()+'@example.com';
+
+function cleanName(name){
+  name=(name||'').trim().toLowerCase();
+  if(!name) throw new Error('Pick a name first.');
+  if(!NAME_RE.test(name))
+    throw new Error('Letters, numbers, - and _ only, 2 to 24 characters.');
+  return name;
+}
+function checkPass(p){
+  if((p||'').length<MIN_PASS) throw new Error('At least '+MIN_PASS+' characters, please.');
+  return p;
+}
+
+/* Step one of the login flow, and the ONLY thing a logged-out visitor can ask
+   the database: is there an account by this name, so do we ask for the password
+   or ask them to choose one. It is a security-definer function rather than a
+   select, so anon still reaches no table at all. */
+async function userExists(name){
+  const c=await db();
+  const {data,error}=await c.rpc('cs_user_exists',{p_username:name});
+  if(error) throw error;
+  return !!data;
+}
+
+/* The cs_users row for whoever is signed in. Supabase Auth is the identity;
+   this is the profile hanging off it. If the row is missing we make it - that
+   is the one broken state reachable here (signUp succeeded, the insert after it
+   did not), and it is why signUp stamps the username into the auth metadata. */
+async function loadMe(){
+  const c=await db();
+  const {data:{user},error:ue}=await c.auth.getUser();
+  if(ue) throw ue;
+  if(!user) throw new Error('Not signed in.');
+  const got=await c.from('cs_users').select('id,username,is_admin').eq('id',user.id).maybeSingle();
+  if(got.error) throw got.error;
+  if(got.data){ session=got.data; return; }
+  const name=(user.user_metadata&&user.user_metadata.username)||(user.email||'').split('@')[0];
+  const ins=await c.from('cs_users').insert({id:user.id, username:name})
+                   .select('id,username,is_admin').single();
+  if(ins.error) throw ins.error;
+  session=ins.data;
+}
+
+async function signInUser(name, pass){
+  const c=await db();
+  const {error}=await c.auth.signInWithPassword({email:userEmail(name), password:pass});
+  if(error) throw new Error(/invalid login credentials/i.test(error.message)
+    ? 'Wrong password.' : (error.message||String(error)));
+  await loadMe();
+}
+
+async function signUpUser(name, pass){
+  const c=await db();
+  const {data,error}=await c.auth.signUp({
+    email:userEmail(name), password:pass,
+    options:{data:{username:name}}          // loadMe's repair path reads this back
+  });
+  if(error) throw new Error(/already registered/i.test(error.message)
+    ? 'That name is taken - go back and sign in instead.' : (error.message||String(error)));
+  /* No session means the project still has "Confirm email" switched on, and
+     there is no inbox for a .invalid address to confirm from. */
+  if(!data.session)
+    throw new Error('This project still has email confirmation on - turn it off under Authentication, Providers, Email.');
+  const ins=await c.from('cs_users').insert({id:data.user.id, username:name})
+                   .select('id,username,is_admin').single();
+  if(ins.error) throw ins.error;
+  session=ins.data;
+}
+
+async function signOutUser(){
+  session=null; currentDrawingId=null;
+  try{ const c=await db(); await c.auth.signOut(); }catch(e){}
+}
+
+function thumbnailNow(){
+  // Frame 0 of the first view with anything in it: the resting pose is the face
+  // of a drawing, whatever the drawing is called and however it animates.
+  for(const n of viewNames){
+    const url=renderViewToDataURL(n,{maxDim:320, frame:0});
+    if(url) return url;
+  }
+  // Nothing in frame 0 of any view - fall back to the first frame that has anything
+  for(let f=1; f<frameCount(); f++)
+    for(const n of viewNames){
+      const url=renderViewToDataURL(n,{maxDim:320, frame:f});
+      if(url) return url;
+    }
+  return null;
+}
+
+async function listDrawings(){
+  const c=await db();
+  let q=c.from('cs_drawings')
+         .select('id,title,kind,rev,thumbnail,deleted_at,updated_at,user_id,cs_users(username)')
+         .order('updated_at',{ascending:false});
+  // an admin sees everyone's work, soft-deleted rows included; everyone else
+  // sees their own, undeleted
+  if(!session.is_admin) q=q.eq('user_id',session.id).is('deleted_at',null);
+  const {data,error}=await q;
+  if(error) throw error;
+  return data||[];
+}
+
+async function saveDrawing(){
+  const c=await db();
+  const scene=sceneToJSON(), thumbnail=thumbnailNow();
+  const title=currentDrawingTitle||'Untitled';
+  const tags=currentDrawingTags||[];
+  // rev is bumped by the database on every update - a client cannot forget to
+  if(currentDrawingId){
+    const {data,error}=await c.from('cs_drawings')
+      .update({scene:scene, thumbnail:thumbnail, title:title, kind:docKind, tags:tags,
+               published:currentDrawingPublished,
+               format_version:SCENE_VERSION, updated_at:new Date().toISOString()})
+      .eq('id',currentDrawingId).select('rev').single();
+    if(error) throw error;
+    if(data) currentDrawingRev=data.rev;
+  }else{
+    const {data,error}=await c.from('cs_drawings')
+      .insert({user_id:session.id, scene:scene, thumbnail:thumbnail, title:title,
+               kind:docKind, tags:tags, published:currentDrawingPublished,
+               format_version:SCENE_VERSION})
+      .select('id,rev').single();
+    if(error) throw error;
+    currentDrawingId=data.id; currentDrawingRev=data.rev;
+  }
+}
+
+/* Soft delete only - the row stays, it is just filtered out of the gallery.
+   The admin view still shows it, struck through. */
+async function deleteDrawing(id){
+  const c=await db();
+  const {error}=await c.from('cs_drawings')
+    .update({deleted_at:new Date().toISOString()}).eq('id',id);
+  if(error) throw error;
+}
+
+async function openDrawing(row){
+  const c=await db();
+  const {data,error}=await c.from('cs_drawings').select('id,scene,title,kind,rev,tags,published').eq('id',row.id).single();
+  if(error) throw error;
+  sceneFromJSON(data.scene);
+  currentDrawingId=data.id;
+  currentDrawingRev=data.rev||1;
+  currentDrawingTitle=data.title||null;   // an old untitled row still gets asked
+  currentDrawingTags=(data.tags||[]).slice();
+  currentDrawingPublished=!!data.published;
+  goScreen('draw');
+}
+
+/* ------------------------------------------------------------------ screens
+   Both overlays sit ON TOP of the editor rather than replacing it - hiding the
+   stage would have the ResizeObserver measure a zero-width canvas. */
+function showScreen(n){
+  uiScreen=n;
+  document.getElementById('loginScreen')  .classList.toggle('hidden', n!=='login');
+  document.getElementById('galleryScreen').classList.toggle('hidden', n!=='gallery');
+  if(n==='login'){
+    document.getElementById('loginErr').textContent='';
+    syncLogin();
+    setTimeout(()=>document.getElementById(loginStep==='name'?'loginName':'loginPass').focus(),0);
+  }
+  if(n==='gallery') renderGallery();
+}
+function goScreen(n){
+  const h='#'+n;
+  if(location.hash!==h) location.hash=h;      // hashchange calls showScreen
+  else showScreen(n);
+}
+window.addEventListener('hashchange',()=>{
+  const n=(location.hash||'').replace('#','')||'draw';
+  if(!session && n!=='login'){ goScreen('login'); return; }
+  if(n==='login'||n==='gallery'||n==='draw') showScreen(n);
+});
+
+function svgIcon(paths,cls){
+  const s=document.createElementNS('http://www.w3.org/2000/svg','svg');
+  s.setAttribute('viewBox','0 0 24 24');
+  if(cls) s.setAttribute('class',cls);
+  for(const d of paths){
+    const p=document.createElementNS('http://www.w3.org/2000/svg','path');
+    p.setAttribute('d',d); s.appendChild(p);
+  }
+  return s;
+}
+
+async function renderGallery(){
+  const grid=document.getElementById('galleryGrid');
+  document.getElementById('galleryWho').textContent =
+    session ? ('Signed in as '+session.username+(session.is_admin?' - admin, showing everyone':'')) : '';
+  grid.textContent='';
+  const loading=document.createElement('div');
+  loading.className='gnote'; loading.textContent='Loading...';
+  grid.appendChild(loading);
+
+  let rows=[];
+  try{ rows=await listDrawings(); }
+  catch(err){
+    grid.textContent='';
+    const n=document.createElement('div');
+    n.className='gnote'; n.textContent='Could not reach Supabase: '+(err.message||err);
+    grid.appendChild(n);
+    return;
+  }
+  grid.textContent='';
+
+  // the empty canvas always sits first
+  const nw=document.createElement('div');
+  nw.className='gcard new';
+  const nwt=document.createElement('div');
+  nwt.className='gthumb';
+  nwt.appendChild(svgIcon(['M12 6v12','M6 12h12']));
+  nw.appendChild(nwt);
+  const nwm=document.createElement('div'); nwm.className='gmeta'; nwm.textContent='New drawing';
+  nw.appendChild(nwm);
+  // No kind picker any more - New drawing always makes an image. The other
+  // kinds are reached through Make Object, which names its own kind.
+  nw.addEventListener('click',()=>{ newScene('character'); goScreen('draw'); });
+  grid.appendChild(nw);
+
+  for(const row of rows){
+    const gone=!!row.deleted_at;
+    const card=document.createElement('div');
+    card.className='gcard'+(gone?' deleted':'');
+
+    const th=document.createElement('div'); th.className='gthumb';
+    if(row.thumbnail){
+      const img=document.createElement('img');
+      img.src=row.thumbnail; img.alt=row.title||'drawing'; img.draggable=false;
+      img.loading='lazy'; img.decoding='async';   // a thumbnail is a ~45KB data: URL and
+      // there can be 200 of them; offscreen rows must never be decoded
+      th.appendChild(img);
+    }else{
+      const e=document.createElement('div'); e.className='empty'; e.textContent='empty';
+      th.appendChild(e);
+    }
+    card.appendChild(th);
+    card.addEventListener('click',()=>openDrawing(row).catch(err=>alert(err.message||err)));
+
+    // a deleted row is a record, not something to act on further
+    if(!gone){
+      const del=document.createElement('button');
+      del.className='gdel'; del.title='Delete';
+      del.appendChild(svgIcon(['M4 7h16',
+        'M9.5 7V5.4A1.4 1.4 0 0 1 10.9 4h2.2a1.4 1.4 0 0 1 1.4 1.4V7',
+        'M6.5 7 7.4 19a1.5 1.5 0 0 0 1.5 1.4h6.2a1.5 1.5 0 0 0 1.5-1.4L17.5 7']));
+      del.addEventListener('click',ev=>{
+        ev.stopPropagation();                 // the card underneath opens the drawing
+        openModal({
+          title:'Delete this drawing?',
+          body:'It disappears from the gallery. The record is kept in the database either way, so this can be undone by hand.',
+          buttons:[
+            {label:'Delete', danger:true, onClick:()=>
+              deleteDrawing(row.id)
+                .then(()=>{ if(currentDrawingId===row.id) currentDrawingId=null; renderGallery(); })
+                .catch(err=>alert(err.message||err))},
+            {label:'Cancel'}
+          ]
+        });
+      });
+      card.appendChild(del);
+    }
+
+    // admins get the author under the thumbnail - that is the only extra
+    const meta=document.createElement('div'); meta.className='gmeta';
+    const kd=DOC_KINDS[row.kind||'character'];
+    const tag=(kd && row.kind && row.kind!=='character') ? ' \u00b7 '+kd.label : '';
+    meta.textContent = session.is_admin
+      ? ((row.cs_users&&row.cs_users.username)||'unknown')+tag+(gone?' - deleted':'')
+      : (row.title||'Untitled')+tag;
+    card.appendChild(meta);
+
+    grid.appendChild(card);
+  }
+}
+
+/* ------------------------------------------------------------- the Library
+   Every PUBLISHED mouth, eye and item, plus every one of your own whether it is
+   published or not - an unpublished drawing is still yours to build with. The
+   listing is deliberately cheap; only the row actually picked has its scene
+   fetched. */
+let libTab='mouths', libRows=null, libBusy=false, libErr='', libTag='', libOpenUsed=false;
+const LIB_TABS={ mouths:'mouths', eyes:'eyes', items:'item' };
+
+async function listSheets(){
+  const c=await db();
+  let q=c.from('cs_drawings')
+    .select('id,title,thumbnail,kind,rev,tags,published,user_id,cs_users(username)')
+    .in('kind',['eyes','mouths','item']).is('deleted_at',null);
+  // an admin sees the lot, as everywhere else
+  if(session && !session.is_admin) q=q.or('published.eq.true,user_id.eq.'+session.id);
+  const {data,error}=await q.order('updated_at',{ascending:false}).limit(200);
+  if(error) throw error;
+  return data||[];
+}
+
+const rowTags = r => (r.tags||[]).map(t=>String(t).toLowerCase());
+
+/* The five most used tags of whatever tab you are on. A tag cloud is only worth
+   showing while there is more than one of them to choose between. */
+function popularTags(rows){
+  const n=new Map();
+  for(const r of rows) for(const t of rowTags(r)) n.set(t,(n.get(t)||0)+1);
+  return [...n.entries()].sort((a,b)=>b[1]-a[1] || a[0].localeCompare(b[0]))
+                         .slice(0,5).map(e=>e[0]);
+}
+
+function libMatches(r,q){
+  if(libTag && rowTags(r).indexOf(libTag)<0) return false;
+  if(!q) return true;
+  return (r.title||'').toLowerCase().indexOf(q)>=0 ||
+         rowTags(r).some(t=>t.indexOf(q)>=0);
+}
+
+function libThumb(row){
+  const th=document.createElement('div'); th.className='gthumb';
+  if(row.thumbnail){
+    const img=document.createElement('img');
+    img.src=row.thumbnail; img.alt=row.title||'drawing'; img.draggable=false;
+    img.loading='lazy'; img.decoding='async';   // a thumbnail is a ~45KB data: URL and
+    // there can be 200 of them; offscreen rows must never be decoded
+    th.appendChild(img);
+  }else{
+    const e=document.createElement('div'); e.className='empty'; e.textContent='empty';
+    th.appendChild(e);
+  }
+  return th;
+}
+
+function renderLibrary(){
+  const grid=document.getElementById('libGrid');
+  const note=document.getElementById('libNote');
+  const cloud=document.getElementById('libTags');
+  document.querySelectorAll('#libTabs button').forEach(b=>b.classList.toggle('on',b.dataset.lib===libTab));
+  grid.textContent=''; note.textContent=''; cloud.textContent='';
+  renderUsed();
+  if(libErr){ note.textContent=libErr; return; }
+  if(libRows===null){ note.textContent = libBusy ? 'Loading...' : ''; return; }
+
+  const q=document.getElementById('libSearch').value.trim().toLowerCase();
+  const mine=libRows.filter(r=>r.kind===LIB_TABS[libTab]);
+
+  const tags=popularTags(mine);
+  if(libTag && tags.indexOf(libTag)<0) tags.push(libTag);   // keep a chosen tag visible
+  for(const t of tags){
+    const b=document.createElement('button');
+    b.className='tagbtn'+(t===libTag?' on':'');
+    b.textContent=t;
+    b.addEventListener('click',()=>{ libTag = libTag===t ? '' : t; renderLibrary(); });
+    cloud.appendChild(b);
+  }
+
+  const rows=mine.filter(r=>libMatches(r,q));
+  if(!rows.length) note.textContent = mine.length ? 'Nothing matches that.'
+                                                  : 'No '+libTab+' saved yet.';
+  for(const row of rows){
+    const card=document.createElement('div');
+    card.className='gcard';
+    card.appendChild(libThumb(row));
+    const meta=document.createElement('div'); meta.className='gmeta';
+    meta.textContent=row.title||'Untitled';
+    card.appendChild(meta);
+    if(rowTags(row).length){
+      const tg=document.createElement('div'); tg.className='gtags';
+      tg.textContent=rowTags(row).join(' ');
+      card.appendChild(tg);
+    }
+    card.addEventListener('click',()=>importRef(row).catch(err=>alert(err.message||err)));
+    grid.appendChild(card);
+  }
+}
+
+/* Every reference the document holds, one row per distinct one however many
+   times it is placed - and whether the drawing it came from has moved on since.
+   The listing already carries every id and rev, so staleness costs no query. */
+function usedRefs(){
+  const out=new Map();
+  for(const n of viewNames) for(let f=0;f<(views[n]||[]).length;f++)
+    for(const s of views[n][f]) if(s.ref){
+      let e=out.get(s.ref.key);
+      if(!e){ e={key:s.ref.key, ref:s.ref, shapes:[], where:[]}; out.set(s.ref.key,e); }
+      e.shapes.push(s); e.where.push({view:n, frame:f});
+    }
+  return [...out.values()];
+}
+function latestRevOf(id){
+  const r=(libRows||[]).find(x=>x.id===id);
+  return r ? (r.rev||1) : null;
+}
+function rowOf(id){ return (libRows||[]).find(x=>x.id===id) || null; }
+
+function renderUsed(){
+  const list=document.getElementById('usedList');
+  const fold=document.getElementById('usedFold');
+  const used=usedRefs();
+  fold.textContent='Used in this drawing ('+used.length+') '+(libOpenUsed?'-':'+');
+  list.classList.toggle('hidden', !libOpenUsed || !used.length);
+  fold.classList.toggle('hidden', !used.length);
+  list.textContent='';
+  if(!libOpenUsed) return;
+
+  for(const u of used){
+    const lib=refLib.get(u.key) || {};
+    const row=rowOf(u.ref.drawingId);
+    const latest=latestRevOf(u.ref.drawingId);
+    const stale=latest!=null && latest>(u.ref.rev||1);
+
+    const el=document.createElement('div'); el.className='urow';
+    el.appendChild(libThumb(row||{thumbnail:null}));
+    const info=document.createElement('div'); info.className='uinfo';
+    const t=document.createElement('div'); t.className='utitle';
+    t.textContent=(u.ref.title||lib.title||'Untitled')+(u.shapes.length>1?' x'+u.shapes.length:'');
+    const by=document.createElement('div'); by.className='uby';
+    by.textContent=(row&&row.cs_users&&row.cs_users.username) || lib.author || 'unknown';
+    info.appendChild(t); info.appendChild(by);
+    const tg=rowTags(row||{tags:lib.tags});
+    if(tg.length){ const d=document.createElement('div'); d.className='gtags';
+                   d.textContent=tg.join(' '); info.appendChild(d); }
+    if(stale){
+      const w=document.createElement('div'); w.className='ustale';
+      w.textContent='Updated';
+      const b=document.createElement('button'); b.className='pbtn'; b.textContent='Update';
+      b.addEventListener('click',e=>{ e.stopPropagation();
+        updateRef(u.key).then(renderLibrary).catch(err=>alert(err.message||err)); });
+      w.appendChild(b);
+      info.appendChild(w);
+    }
+    el.appendChild(info);
+    // clicking the row finds the thing in the drawing, wherever it is hiding
+    el.addEventListener('click',()=>{
+      const w=u.where[0];
+      if(w.view!==view) setView(w.view);
+      if(w.frame!==frame) setFrame(w.frame);
+      const here=u.shapes.filter(s=>cur().indexOf(s)>=0);
+      selected=here[0]||u.shapes[0]; extra=here.slice(1);
+      syncPalette(); render();
+    });
+    list.appendChild(el);
+  }
+}
+
+function refreshLibrary(){
+  libBusy=true; libRows=null; libErr=''; renderLibrary();
+  listSheets()
+    .then(r=>{ libRows=r; })
+    .catch(err=>{ libRows=[]; libErr='Could not reach Supabase: '+(err.message||err); })
+    .then(()=>{ libBusy=false; renderLibrary(); });
+}
+/* The placement box. NOT four corners: buildPath is a quadratic through segment
+   midpoints, so four points draw as a squircle inscribed in the rectangle - and
+   shapeAt builds exactly that path, which would leave the corners of every
+   imported sheet unclickable under a selection box drawn square. */
+function boxPts(w,h){
+  const hx=w/2, hy=h/2, N=4, out=[];
+  const c=[{x:-hx,y:-hy},{x:hx,y:-hy},{x:hx,y:hy},{x:-hx,y:hy}];
+  for(let i=0;i<4;i++){
+    const a=c[i], d=c[(i+1)%4];
+    for(let j=0;j<N;j++) out.push({x:a.x+(d.x-a.x)*j/N, y:a.y+(d.y-a.y)*j/N});
+  }
+  return out;
+}
+
+/* Turn a fetched row into a refLib entry, and hand back its key and the size of
+   the box that wraps it. Shared by the Library's pick and by Update, which is
+   the same operation aimed at a shape that already exists.
+
+   An imported drawing keeps ALL its frames - a reference is a stamp of a whole
+   animation, and which frame of it shows is the instance's business. Only its
+   FIRST view travels: front, or a sheet's only one. */
+function buildRefEntry(data){
+  // migrateScene ONLY - sceneFromJSON would throw the editor away and load the row
+  const o=migrateScene(typeof data.scene==='string'?JSON.parse(data.scene):data.scene);
+  const vOrder=(o.viewOrder||[]).filter(n=>Array.isArray((o.views||{})[n]));
+  if(!vOrder.length) throw new Error('That drawing has no views.');
+  const frames=JSON.parse(JSON.stringify(o.views[vOrder[0]]));
+
+  /* ONE shared offset for every frame - centring each frame on its own bbox
+     would make them jitter against each other. The union of all the frames is
+     what the placement box wraps, so a bigger frame can never fall outside it
+     or be cropped out of an export. The drawing's coordinates are its own
+     canvas's, so without this the artwork lands hundreds of px from its box. */
+  let x0=1e9,y0=1e9,x1=-1e9,y1=-1e9,any=false;
+  for(const fr of frames) for(const s of fr){
+    delete s.id;                              // those ids belong to the other scene
+    if(!s.pts || s.pts.length<2) continue;
+    const bb=bbox(worldPts(s)), pad=(s.lw||0)/2+1;
+    if(bb.x0-pad<x0) x0=bb.x0-pad;  if(bb.y0-pad<y0) y0=bb.y0-pad;
+    if(bb.x1+pad>x1) x1=bb.x1+pad;  if(bb.y1+pad>y1) y1=bb.y1+pad;
+    any=true;
+  }
+  if(!any) throw new Error('That drawing is empty.');
+  const ox=(x0+x1)/2, oy=(y0+y1)/2;
+  const bw=Math.max(1,x1-x0), bh=Math.max(1,y1-y0);
+  for(const fr of frames) for(const s of fr){ s.x-=ox; s.y-=oy; }
+
+  /* ownerId is what decides whether this document may be edited in place, and
+     cx/cy is the offset just taken out of every frame - the backdrop pass needs
+     it to draw the parent in the object's own coordinates. */
+  const entry={ kind:data.kind, title:data.title||'Untitled', drawingId:data.id,
+                rev:data.rev||1, tags:data.tags||[], published:!!data.published,
+                ownerId:data.user_id||null, cx:ox, cy:oy,
+                author:(data.cs_users&&data.cs_users.username)||'',
+                frameNames:(o.frameNames||null), frameCount:Math.max(1,frames.length),
+                views:{ main:frames }, refs:(o.refs||{}) };
+  return { key:data.id+'@'+(data.rev||1), entry:entry, bw:bw, bh:bh };
+}
+
+/* Point a shape at a reference without moving it. Position and rotation are
+   untouched and the on-screen WIDTH is held, so swapping to a differently sized
+   drawing does not make the thing jump. Update in the Library runs this too. */
+function placeRef(shape, built){
+  const k=Math.max(1,bbox(shape.pts).w)/built.bw;
+  shape.sx*=k; shape.sy*=k;                   // sign survives, so a flip survives
+  shape.pts=boxPts(built.bw,built.bh);
+  const old=shape.ref||{};
+  shape.ref={ key:built.key, drawingId:built.entry.drawingId, rev:built.entry.rev,
+              kind:built.entry.kind, title:built.entry.title,
+              frame:Math.max(0,Math.min(built.entry.frameCount-1, old.frame||0)),
+              follow:!!old.follow };
+}
+
+/* An imported item may hold references of its own - they have to travel with it
+   or the inner one draws as nothing. */
+function absorbNestedRefs(entry){
+  for(const k of Object.keys(entry.refs||{}))
+    if(!refLib.has(k)) refLib.set(k, migrateRefEntry(entry.refs[k]));
+}
+
+/* Would importing this put the drawing inside itself? Only reachable now that an
+   item can import an item. REF_MAX_DEPTH would stop the draw, but a cycle costs
+   four nested passes on every frame, so it is refused at the door instead. */
+function refCycles(entry, targetId){
+  if(!targetId) return false;
+  const seen=new Set(), q=[entry];
+  while(q.length){
+    const e=q.pop();
+    if(!e) continue;
+    if(e.drawingId===targetId) return true;
+    for(const vn of Object.keys(e.views||{})) for(const fr of e.views[vn]||[])
+      for(const s of fr||[]) if(s && s.ref && !seen.has(s.ref.key)){
+        seen.add(s.ref.key); q.push((e.refs||{})[s.ref.key] || refLib.get(s.ref.key));
+      }
+  }
+  return false;
+}
+
+const REF_COLS='id,scene,title,kind,rev,tags,user_id,cs_users(username)';
+
+/* Bring a whole drawing in as ONE reference. There is deliberately no limit on
+   how many of these a document may hold, or on how many of the same kind. */
+async function importRef(row){
+  const c=await db();
+  const {data,error}=await c.from('cs_drawings').select(REF_COLS).eq('id',row.id).single();
+  if(error) throw error;
+  const built=buildRefEntry(data);
+  if(refCycles(built.entry, currentDrawingId))
+    throw new Error('That would put this drawing inside itself.');
+
+  refLib.set(built.key, built.entry);
+  absorbNestedRefs(built.entry);
+
+  pushUndo();
+  const r=cv.getBoundingClientRect();
+  // a quarter of the stage at most, and never blown up past its authored size
+  const fit=Math.min(1, (Math.min(r.width,r.height)*0.25)/Math.max(built.bw,built.bh));
+  const s={ id:uid++, pts:boxPts(built.bw,built.bh), x:r.width/2, y:r.height/2,
+            rot:0, sx:fit, sy:fit,
+            lw:0, closed:true, colors:{outline:NONE, fill:NONE, shadow:NONE},
+            ref:{ key:built.key, drawingId:built.entry.drawingId, rev:built.entry.rev,
+                  kind:built.entry.kind, title:built.entry.title, frame:0, follow:false } };
+  cur().push(s);
+  selected=s; extra=[];
+  syncPalette();
+}
+
+/* Swap every instance of a reference to the newest revision of the drawing it
+   came from, in place. Undo needs nothing extra: the new revision gets a refLib
+   key of its OWN and the shapes are repointed at it, and the shapes are what
+   snapshot() carries. The old entry is left behind, inert, exactly as an undone
+   import already leaves one - and sceneToJSON prunes it on the way out. */
+async function updateRef(oldKey){
+  const old=refLib.get(oldKey);
+  if(!old) return;
+  const c=await db();
+  const {data,error}=await c.from('cs_drawings').select(REF_COLS).eq('id',old.drawingId).single();
+  if(error) throw error;
+  const built=buildRefEntry(data);
+  if(built.key===oldKey) return;              // already the latest
+  refLib.set(built.key, built.entry);
+  absorbNestedRefs(built.entry);
+
+  pushUndo();
+  for(const n of viewNames) for(const fr of views[n]||[]) for(const s of fr)
+    if(s.ref && s.ref.key===oldKey) placeRef(s, built);
+  syncPalette(); render();
+}
+document.getElementById('btnLibrary').addEventListener('click',()=>{
+  if(!canImport()) return;
+  paletteMode = paletteMode==='library' ? 'paint' : 'library';
+  syncPalette();
+  if(paletteMode==='library'){
+    refreshLibrary();
+    setTimeout(()=>document.getElementById('libSearch').focus(),0);
+  }
+});
+document.getElementById('libTabs').addEventListener('click',e=>{
+  const b=e.target.closest('button');
+  if(b && b.dataset.lib){ libTab=b.dataset.lib; libTag=''; renderLibrary(); }
+});
+/* Debounced: renderLibrary() throws the whole grid away and rebuilds every card,
+   and each card's thumbnail is a ~45KB data: URL the browser has to decode again.
+   Running that on every keystroke was the most expensive thing in the app after
+   the render loop. */
+let libSearchT=0;
+document.getElementById('libSearch').addEventListener('input',()=>{
+  clearTimeout(libSearchT); libSearchT=setTimeout(renderLibrary,150);
+});
+document.getElementById('usedFold').addEventListener('click',()=>{ libOpenUsed=!libOpenUsed; renderUsed(); });
+
+/* ------------------------------------------------------------- screen wiring */
+/* The login card is a two-step form. 'name' asks who you are; the answer to
+   cs_user_exists then decides whether step two is 'in' (sign in to an account
+   that exists) or 'up' (choose a password for a new one). syncLogin is the only
+   thing that touches the card's visibility, so the two steps cannot drift. */
+let loginStep='name';             // 'name' | 'in' | 'up'
+let loginUsername='';
+let loginBusy=false;
+
+function syncLogin(){
+  const el=id=>document.getElementById(id);
+  const named=loginStep!=='name';
+  el('loginIntro').classList.toggle('hidden', named);
+  el('loginName') .classList.toggle('hidden', named);
+  el('loginWho')  .classList.toggle('hidden', !named);
+  el('loginPass') .classList.toggle('hidden', !named);
+  el('loginPass2').classList.toggle('hidden', loginStep!=='up');
+  el('loginBack') .classList.toggle('hidden', !named);
+  if(named) el('loginWho').innerHTML = (loginStep==='up'
+    ? 'Making a new account for <b></b>. Choose a password.'
+    : 'Signing in as <b></b>.');
+  if(named) el('loginWho').querySelector('b').textContent=loginUsername;
+  el('loginGo').textContent = loginStep==='name' ? 'Continue'
+                            : loginStep==='up'   ? 'Create account' : 'Sign in';
+  /* Nothing can be submitted before the Supabase client has loaded, or the
+     flow half-runs against a client that is not there. */
+  const off=loginBusy||!sbLoaded;
+  for(const id of ['loginName','loginPass','loginPass2','loginGo']) el(id).disabled=off;
+  el('loginPass').setAttribute('autocomplete', loginStep==='up'?'new-password':'current-password');
+}
+function loginReset(){
+  loginStep='name'; loginBusy=false;
+  document.getElementById('loginPass').value='';
+  document.getElementById('loginPass2').value='';
+  document.getElementById('loginErr').textContent='';
+  syncLogin();
+}
+function loginFail(e){
+  loginBusy=false;
+  document.getElementById('loginErr').textContent=e.message||String(e);
+  syncLogin();
+}
+
+function doLogin(){
+  if(loginBusy||!sbLoaded) return;
+  const el=id=>document.getElementById(id);
+  el('loginErr').textContent='';
+  loginBusy=true; syncLogin();
+
+  if(loginStep==='name'){
+    let name;
+    try{ name=cleanName(el('loginName').value); }catch(e){ return loginFail(e); }
+    userExists(name)
+      .then(found=>{
+        loginUsername=name; loginStep=found?'in':'up'; loginBusy=false;
+        syncLogin(); el('loginPass').focus();
+      })
+      .catch(loginFail);
+    return;
+  }
+
+  const pass=el('loginPass').value;
+  let go;
+  try{
+    if(loginStep==='up'){
+      checkPass(pass);
+      if(pass!==el('loginPass2').value) throw new Error('The two passwords do not match.');
+      go=signUpUser(loginUsername, pass);
+    }else{
+      if(!pass) throw new Error('Password, please.');
+      go=signInUser(loginUsername, pass);
+    }
+  }catch(e){ return loginFail(e); }
+
+  go.then(()=>{ loginReset(); goScreen('gallery'); }).catch(loginFail);
+}
+
+document.getElementById('loginGo').addEventListener('click',doLogin);
+document.getElementById('loginBack').addEventListener('click',()=>{
+  loginReset(); document.getElementById('loginName').focus();
+});
+for(const id of ['loginName','loginPass','loginPass2'])
+  document.getElementById(id).addEventListener('keydown',e=>{
+    if(e.key==='Enter'){ e.preventDefault(); doLogin(); }
+  });
+
+document.getElementById('btnLogout').addEventListener('click',()=>{
+  guardUnsaved(()=>{ signOutUser().then(()=>{ loginReset(); goScreen('login'); }); });
+});
+document.getElementById('btnGallery').addEventListener('click',()=>{
+  if(!session){ goScreen('login'); return; }
+  guardUnsaved(()=>goScreen('gallery'));
+});
+
+/* ------------------------------------------------- the unsaved-work guard
+   Leaving the editor with work that is not in the gallery loses it: there is
+   no draft anywhere, only the row. So anything that walks away from the
+   drawing asks first, and the answer is one of save it, throw it away, or stay.
+   An empty drawing has nothing to lose, so it never asks. */
+function hasArt(){
+  return viewNames.some(n=>(views[n]||[]).some(f=>f && f.length));
+}
+function unsaved(){ return dirty && hasArt(); }
+function guardUnsaved(go){
+  /* An object being edited in place is a whole document sitting on a stack; the
+     way out of it is Done or Cancel, not the gallery. */
+  if(editStack.length){
+    openModal({
+      title:'Finish with this object first',
+      body:'You are editing '+editWhoText()+'. Use Done or Cancel on the banner before leaving.',
+      buttons:[{label:'OK', primary:true}]
+    });
+    return;
+  }
+  if(!unsaved()){ go(); return; }
+  openModal({
+    title:'Save this drawing first?',
+    body:'It has changes that are not in the gallery. Leaving without saving throws them away.',
+    buttons:[
+      {label:'Save', primary:true, onClick:()=>saveThen(go)},
+      {label:'Throw it away', danger:true, onClick:()=>{ dirty=false; go(); }},
+      {label:'Cancel'}
+    ]
+  });
+}
+/* Save, then carry on - the name prompt sits in the middle of it for a drawing
+   that has never been saved, and cancelling that leaves you where you were. */
+function saveThen(after){
+  if(!session){ goScreen('login'); return; }
+  if(!currentDrawingTitle) askNameThenSave(after);
+  else doSave(after);
+}
+/* The browser's own prompt is the only thing that can catch a reload, a Back or
+   a closed tab - it cannot be a modal of ours. */
+window.addEventListener('beforeunload',e=>{
+  if(!unsaved()) return;
+  e.preventDefault(); e.returnValue='';
+});
+
+function doSave(after){
+  const btn=document.getElementById('btnSave');
+  btn.disabled=true;
+  saveDrawing()
+    .then(()=>{ dirty=false; syncChrome(); syncMeta();
+                btn.classList.add('ok'); setTimeout(()=>btn.classList.remove('ok'),1200);
+                if(after) after(); })
+    .catch(err=>alert('Save failed: '+(err.message||err)))
+    .then(()=>{ btn.disabled=false; });
+}
+/* Tags are freeform and defined at first use, so there is nothing to validate -
+   only to normalise. Lower-case, comma or space separated, deduped. */
+function parseTags(s){
+  const out=[];
+  for(const t of String(s||'').toLowerCase().replace(/,/g,' ').split(' ')){
+    const v=t.trim();
+    if(v && out.indexOf(v)<0) out.push(v);
+  }
+  return out;
+}
+/* Autosuggest is every tag anyone has ever used, most used first. One cheap
+   query, cached for the session - a tag list does not have to be live. */
+let tagPool=null;
+async function loadTagPool(){
+  if(tagPool) return tagPool;
+  const c=await db();
+  let q=c.from('cs_drawings').select('tags').is('deleted_at',null);
+  if(session && !session.is_admin) q=q.or('published.eq.true,user_id.eq.'+session.id);
+  const {data,error}=await q.limit(500);
+  if(error) throw error;
+  const n=new Map();
+  for(const r of data||[]) for(const t of r.tags||[]){
+    const v=String(t).toLowerCase(); n.set(v,(n.get(v)||0)+1);
+  }
+  tagPool=[...n.entries()].sort((a,b)=>b[1]-a[1]).map(e=>e[0]);
+  return tagPool;
+}
+function fillTagList(){
+  loadTagPool().then(pool=>{
+    const dl=document.getElementById('tagList');
+    dl.textContent='';
+    for(const t of pool){ const o=document.createElement('option'); o.value=t; dl.appendChild(o); }
+  }).catch(()=>{});
+}
+
+/* A drawing with no name yet is named before it is saved. Cancel saves nothing,
+   and neither does an empty name - the modal just goes away. Tags are optional
+   here and can be edited afterwards from the top bar; the name cannot. */
+function askNameThenSave(after){
+  fillTagList();
+  openModal({
+    title:'Name this drawing',
+    input:{placeholder:'Untitled'},
+    input2:{placeholder:'tags, space or comma separated', value:(currentDrawingTags||[]).join(' ')},
+    buttons:[
+      {label:'Save', primary:true, onClick:(v,v2)=>{
+        v=(v||'').trim();
+        if(!v) return;
+        currentDrawingTitle=v;
+        currentDrawingTags=parseTags(v2);
+        doSave(after);
+      }},
+      {label:'Cancel'}
+    ]
+  });
+}
+/* Superseded by the metadata box at the bottom of the sidebar, which is where
+   tags are edited now. Kept because it is the one modal that only asks for tags. */
+function askTags(){
+  fillTagList();
+  openModal({
+    title:'Tags',
+    body:'Freeform and lower-case. They are what the Library searches on.',
+    input2:{placeholder:'tags, space or comma separated', value:(currentDrawingTags||[]).join(' ')},
+    buttons:[
+      {label:'Save', primary:true, onClick:(v,v2)=>{
+        currentDrawingTags=parseTags(v2);
+        if(currentDrawingId) doSave();
+      }},
+      {label:'Cancel'}
+    ]
+  });
+}
+document.getElementById('btnSave').addEventListener('click',()=>{
+  if(!session){ goScreen('login'); return; }
+  if(!currentDrawingTitle) askNameThenSave();
+  else doSave();
+});
+
+/* ==================================================== objects in this drawing
+   Three things live here, and they are one story: a selection can be promoted
+   into a drawing of its own (Make Object), a drawing of your own that has been
+   imported can be edited without leaving the one it sits in (the edit stack),
+   and either one's name, tags and published flag are edited in the metadata box
+   at the bottom of the sidebar. */
+
+/* ------------------------------------------------------------- the chrome
+   The bits that are neither the palette nor the frames: the save button's
+   unsaved dot, the publish light and the edit banner.
+
+   It runs off render() rather than off the edits, because pushUndo - the one
+   place every edit lands - fires BEFORE the edit is made, so the very first
+   stroke in an empty drawing sets dirty at a moment when hasArt() is still
+   false and the dot would never appear. Memoised on a key of everything it
+   shows, so sixty calls a second cost one string compare. */
+let chromeKey='';
+function syncChrome(){
+  const key=[unsaved(), currentDrawingPublished, editStack.length,
+             editStack.length?editWhoText():''].join('|');
+  if(key===chromeKey) return;
+  chromeKey=key;
+  const save=document.getElementById('btnSave');
+  save.classList.toggle('dirty', unsaved());
+  document.getElementById('saveTip').textContent =
+    unsaved() ? 'Save to the gallery - unsaved changes' : 'Save to the gallery';
+
+  const pub=document.getElementById('btnPublish');
+  pub.classList.toggle('on', !!currentDrawingPublished);
+  document.getElementById('pubTip').textContent = currentDrawingPublished
+    ? 'Published - other users can use it. Click to make it private again.'
+    : 'Publish so other users can use it';
+
+  const bar=document.getElementById('editbar');
+  bar.classList.toggle('hidden', !editStack.length);
+  if(editStack.length) document.getElementById('editWho').innerHTML=editWhoHTML();
+}
+function editWhoText(){
+  const k=(DOC_KINDS[docKind]||{label:docKind}).label;
+  return k+' "'+(currentDrawingTitle||'Untitled')+'"';
+}
+function editWhoHTML(){
+  const k=(DOC_KINDS[docKind]||{label:docKind}).label;
+  const t=(currentDrawingTitle||'Untitled').replace(/[<&]/g,c=>c==='<'?'&lt;':'&amp;');
+  return 'Editing '+k+' <b>'+t+'</b>';
+}
+
+/* -------------------------------------------------------------- publishing
+   A drawing is private until this is on. The gallery is your own work either
+   way; it is the Library - what other people can build with - that this gates. */
+async function togglePublish(){
+  if(!session){ goScreen('login'); return; }
+  if(!currentDrawingId){                       // nothing to publish until there is a row
+    saveThen(()=>togglePublish());
+    return;
+  }
+  const want=!currentDrawingPublished;
+  const btn=document.getElementById('btnPublish');
+  btn.disabled=true;
+  try{
+    const c=await db();
+    const {error}=await c.from('cs_drawings').update({published:want}).eq('id',currentDrawingId);
+    if(error) throw error;
+    currentDrawingPublished=want;
+    /* The update bumped rev, and a stale rev here would have this drawing's own
+       Save write the old one back into anything that imports it. */
+    const got=await c.from('cs_drawings').select('rev').eq('id',currentDrawingId).single();
+    if(!got.error && got.data) currentDrawingRev=got.data.rev;
+    syncChrome(); syncMeta();
+  }catch(err){
+    alert('Could not change that: '+(err.message||err));
+  }
+  btn.disabled=false;
+}
+document.getElementById('btnPublish').addEventListener('click',togglePublish);
+
+/* --------------------------------------------------------- the metadata box
+   It shows the drawing you are in, unless exactly one imported drawing is
+   selected - then it shows that one, and edits go to ITS row. Editing another
+   user's object is refused: the fields go inert rather than away, so the facts
+   still read. */
+function metaTarget(){
+  const grp=selGroup();
+  const s = grp.length===1 && grp[0].ref ? grp[0] : null;
+  const e = s && refLib.get(s.ref.key);
+  return e ? {ref:true, shape:s, entry:e} : {ref:false};
+}
+function syncMeta(){
+  const t=metaTarget();
+  const title=document.getElementById('metaTitle');
+  const tags =document.getElementById('metaTags');
+  const pub  =document.getElementById('metaPub');
+  const facts=document.getElementById('metaFacts');
+  const head =document.getElementById('metaHead');
+
+  if(t.ref){
+    const e=t.entry, mine=canEditRef(t.shape);
+    head.textContent='Object';
+    title.value=e.title||'';
+    tags.value=(e.tags||[]).join(' ');
+    pub.checked=!!e.published;
+    title.disabled=tags.disabled=pub.disabled=!mine;
+    facts.textContent=
+      (DOC_KINDS[e.kind]||{label:e.kind}).label+' - rev '+(e.rev||1)+
+      (e.author?' - by '+e.author:'')+
+      ' - '+(e.frameCount||1)+(e.frameCount===1?' frame':' frames')+
+      (mine?'':' - not yours to edit');
+  }else{
+    head.textContent='Drawing';
+    title.value=currentDrawingTitle||'';
+    tags.value=(currentDrawingTags||[]).join(' ');
+    pub.checked=!!currentDrawingPublished;
+    title.disabled=tags.disabled=false;
+    pub.disabled=!currentDrawingId;
+    facts.textContent=
+      (DOC_KINDS[docKind]||{label:docKind}).label+
+      (currentDrawingId?' - rev '+currentDrawingRev:' - not saved yet')+
+      ' - '+viewNames.length+(viewNames.length===1?' view':' views')+
+      ' - '+frameCount()+(frameCount()===1?' frame':' frames');
+  }
+}
+/* Committed on change/blur rather than on every keystroke - each commit is a row
+   write. Enter commits too, which is what a one-line field should do. */
+function commitMeta(){
+  const t=metaTarget();
+  const nt=document.getElementById('metaTitle').value.trim();
+  const ng=parseTags(document.getElementById('metaTags').value);
+  const np=document.getElementById('metaPub').checked;
+
+  if(t.ref){
+    if(!canEditRef(t.shape)){ syncMeta(); return; }
+    const e=t.entry;
+    if(nt===(e.title||'') && ng.join(' ')===(e.tags||[]).join(' ') && np===!!e.published) return;
+    metaWriteRef(t.shape, e, nt||e.title||'Untitled', ng, np);
+    return;
+  }
+  const changed = nt!==(currentDrawingTitle||'') ||
+                  ng.join(' ')!==(currentDrawingTags||[]).join(' ') ||
+                  np!==!!currentDrawingPublished;
+  if(!changed) return;
+  // A blank name is not a rename - a drawing that has one keeps it.
+  if(nt) currentDrawingTitle=nt;
+  currentDrawingTags=ng;
+  currentDrawingPublished=np;
+  syncChrome();
+  if(currentDrawingId) doSave(); else syncMeta();
+}
+/* The title of a reference lives in two places - the refLib entry, and a copy in
+   every shape that points at it, which is what the sidebar and the Library fold
+   read. Both move under ONE pushUndo, so it is one undo step. */
+async function metaWriteRef(shape, entry, title, tags, published){
+  try{
+    const c=await db();
+    const {error}=await c.from('cs_drawings')
+      .update({title:title, tags:tags, published:published}).eq('id',entry.drawingId);
+    if(error) throw error;
+    pushUndo();
+    entry.title=title; entry.tags=tags; entry.published=published;
+    for(const n of viewNames) for(const fr of views[n]||[]) for(const s of fr)
+      if(s.ref && s.ref.key===shape.ref.key) s.ref.title=title;
+    syncPalette(); render();
+  }catch(err){
+    alert('Could not change that: '+(err.message||err));
+    syncMeta();
+  }
+}
+['metaTitle','metaTags'].forEach(id=>{
+  const el=document.getElementById(id);
+  el.addEventListener('change',commitMeta);
+  el.addEventListener('keydown',e=>{ if(e.key==='Enter'){ e.preventDefault(); el.blur(); } });
+});
+document.getElementById('metaPub').addEventListener('change',commitMeta);
+
+/* --------------------------------------------------------------- Make Object
+   Draw the eyes inside the face, then promote them: the shapes come out of this
+   drawing, go into a new one of the kind you picked, and a reference to it lands
+   exactly where they were. That is the whole point - no round trip through the
+   gallery and the Library to make a thing you have already drawn. */
+/* Built on top of sceneToJSON rather than beside it: the canvas size, the whole
+   render block and the editor block are the same for the child as for the parent
+   - it is authored on this stage, under this light - and writing them out twice
+   would let the two drift. Only what makes it a document of its own is replaced. */
+function objectSceneFrom(shapes, kind){
+  const def=DOC_KINDS[kind]||DOC_KINDS.item;
+  const names=def.views.map(v=>v[0]);
+  const nF = def.frameNames ? def.frameNames.length : 1;
+
+  const v={};
+  for(const n of names){ v[n]=[]; for(let i=0;i<nF;i++) v[n].push([]); }
+  /* Frame 0 of the first view: the resting pose. The coordinates stay the
+     PARENT's - buildRefEntry recentres on the union bbox anyway, and keeping
+     them is what makes the reference land on top of what it replaced. */
+  v[names[0]][0]=JSON.parse(JSON.stringify(shapes));
+
+  const refs={};
+  for(const k of usedRefKeys(v)) if(refLib.has(k)) refs[k]=refLib.get(k);
+
+  const o=sceneToJSON();
+  o.kind=kind;
+  o.viewOrder=names;
+  o.frameNames=(def.frameNames||null);
+  o.frameCount=nF;
+  o.views=v;
+  o.refs=refs;
+  o.editor.activeView=names[0];
+  o.editor.activeFrame=0;
+  return o;
+}
+function closeMkObjMenu(){
+  document.getElementById('mkObjMenu').classList.add('hidden');
+}
+async function makeObject(kind){
+  closeMkObjMenu();
+  if(!session){ goScreen('login'); return; }
+  const grp=selGroup();
+  if(!grp.length || !canImport()) return;
+
+  const btn=document.getElementById('mkObjBtn');
+  btn.disabled=true;
+  try{
+    const def=DOC_KINDS[kind]||DOC_KINDS.item;
+    const title=(currentDrawingTitle||'Untitled')+' '+def.label.toLowerCase();
+    const scene=objectSceneFrom(grp,kind);
+    const thumbnail=renderViewToDataURL(view,{maxDim:320, shapes:grp});
+
+    const c=await db();
+    const {data,error}=await c.from('cs_drawings')
+      .insert({user_id:session.id, scene:scene, thumbnail:thumbnail, title:title,
+               kind:kind, tags:[], published:false, format_version:SCENE_VERSION})
+      .select('id,rev').single();
+    if(error) throw error;
+
+    /* buildRefEntry takes a plain row, so the one just written does not have to
+       be read back to be imported. */
+    const built=buildRefEntry({ id:data.id, rev:data.rev, title:title, kind:kind,
+                                tags:[], scene:scene, user_id:session.id,
+                                cs_users:{username:session.username} });
+    if(refCycles(built.entry, currentDrawingId))
+      throw new Error('That would put this drawing inside itself.');
+    built.entry.published=false;
+    refLib.set(built.key, built.entry);
+    absorbNestedRefs(built.entry);
+
+    /* Nothing above this line touched the document, so a failure anywhere in it
+       leaves the drawing exactly as it was. */
+    pushUndo();
+    const gb=bbox(grp.flatMap(worldPts));
+    const list=cur(), keep=new Set(grp);
+    for(let i=list.length-1;i>=0;i--) if(keep.has(list[i])) list.splice(i,1);
+
+    /* Scale 1 and the group's own centre: the child kept the parent's
+       coordinates, so its union bbox IS this box and the reference lands on top
+       of what it replaced, to the pixel. */
+    const s={ id:uid++, pts:boxPts(built.bw,built.bh),
+              x:(built.entry.cx!=null?built.entry.cx:gb.cx),
+              y:(built.entry.cy!=null?built.entry.cy:gb.cy),
+              rot:0, sx:1, sy:1,
+              lw:0, closed:true, colors:{outline:NONE, fill:NONE, shadow:NONE},
+              ref:{ key:built.key, drawingId:data.id, rev:data.rev,
+                    kind:kind, title:title, frame:0, follow:false } };
+    list.push(s);
+    selected=s; extra=[];
+    syncPalette(); render();
+  }catch(err){
+    alert('Could not make that object: '+(err.message||err));
+  }
+  btn.disabled=false;
+}
+document.getElementById('mkObjBtn').addEventListener('click',e=>{
+  e.stopPropagation();
+  document.getElementById('mkObjMenu').classList.toggle('hidden');
+});
+document.getElementById('mkObjMenu').addEventListener('click',e=>{
+  const b=e.target.closest('button');
+  if(b && b.dataset.mkobj) makeObject(b.dataset.mkobj);
+});
+window.addEventListener('pointerdown',e=>{
+  if(!e.target.closest('#mkObjWrap')) closeMkObjMenu();
+});
+
+/* ------------------------------------------------- editing an object in place
+   A reference is normally inert - editable() refuses everything but move and
+   resize. This is the way in: the object's own document is pushed on top of this
+   one, so the view switch and the animation bar become ITS (an eye sheet's six
+   named expressions, locked), and the drawing it came out of stays on screen
+   behind it as context. Done saves it and repoints every instance at the new
+   revision, which is exactly what the Library's Update already does. */
+const canEditRef = s => {
+  if(!session || !s || !s.ref) return false;
+  const e=refLib.get(s.ref.key);
+  if(!e) return false;
+  // ownerId is new; a scene saved before it existed still carries the username
+  return e.ownerId ? e.ownerId===session.id : (!!e.author && e.author===session.username);
+};
+
+let editStack=[];   // one entry per level of nesting
+
+/* The parent, drawn ghosted in the object's own coordinates. The reference maps
+   object space to parent space as p = R(rot).S(sx,sy).(o - c) + (x,y), so this
+   is that inverted. A scene saved before entries carried a centre has nothing to
+   align against, so it simply gets no backdrop. */
+function drawEditBackdrop(){
+  if(!editStack.length) return;
+  const c=editStack[editStack.length-1];
+  const p=c.place;
+  if(!p || p.cx==null || !p.sx || !p.sy) return;
+  const list=((c.scene.views||{})[c.view]||[])[c.frame]||[];
+  if(!list.length) return;
+  ctx.save();
+  ctx.translate(p.cx,p.cy);
+  ctx.scale(1/p.sx, 1/p.sy);
+  ctx.rotate(-p.rot);
+  ctx.translate(-p.x,-p.y);
+  for(const s of list) if(s.id!==c.shapeId) drawShape(s,{ghost:true, pframe:c.frame});
+  ctx.restore();
+}
+
+async function enterObjectEdit(shape){
+  if(!canEditRef(shape)) return;
+  if(editStack.length>=REF_MAX_DEPTH) return;
+  const entry=refLib.get(shape.ref.key);
+  const btn=document.getElementById('editRefBtn');
+  btn.disabled=true;
+  try{
+    pauseAnim();
+    const c=await db();
+    const {data,error}=await c.from('cs_drawings')
+      .select('id,scene,title,kind,rev,tags,published').eq('id',shape.ref.drawingId).single();
+    if(error) throw error;
+
+    editStack.push({
+      scene:sceneToJSON(), view:view, frame:frame, dirty:dirty,
+      id:currentDrawingId, title:currentDrawingTitle, rev:currentDrawingRev,
+      tags:(currentDrawingTags||[]).slice(), published:currentDrawingPublished,
+      shapeId:shape.id, refKey:shape.ref.key,
+      place:{ x:shape.x, y:shape.y, rot:shape.rot, sx:shape.sx, sy:shape.sy,
+              cx:entry.cx, cy:entry.cy }
+    });
+
+    /* sceneFromJSON runs setViewNames, so the view switch and the animation bar
+       become the object's with nothing extra to do - which is the whole ask. */
+    sceneFromJSON(data.scene);
+    currentDrawingId=data.id;
+    currentDrawingRev=data.rev||1;
+    currentDrawingTitle=data.title||null;
+    currentDrawingTags=(data.tags||[]).slice();
+    currentDrawingPublished=!!data.published;
+    syncChrome(); syncPalette(); render();
+  }catch(err){
+    editStack.pop();
+    alert('Could not open that object: '+(err.message||err));
+  }
+  btn.disabled=false;
+}
+
+function popEditContext(){
+  const c=editStack.pop();
+  sceneFromJSON(c.scene);
+  currentDrawingId=c.id; currentDrawingTitle=c.title; currentDrawingRev=c.rev;
+  currentDrawingTags=c.tags; currentDrawingPublished=c.published;
+  setView(c.view);
+  frame=Math.max(0,Math.min(frameCount()-1,c.frame));
+  syncFrames();
+  dirty=c.dirty;
+  const back=cur().find(s=>s.id===c.shapeId);
+  if(back){ selected=back; extra=[]; }
+  return c;
+}
+async function exitObjectEdit(save){
+  if(!editStack.length) return;
+  if(!save && unsaved()){
+    openModal({
+      title:'Throw away these changes?',
+      body:'The object has changes that are not saved. Leaving now loses them.',
+      buttons:[
+        {label:'Save', primary:true, onClick:()=>exitObjectEdit(true)},
+        {label:'Throw it away', danger:true, onClick:()=>{ dirty=false; exitObjectEdit(false); }},
+        {label:'Cancel'}
+      ]
+    });
+    return;
+  }
+  const done=document.getElementById('btnEditDone');
+  const cancel=document.getElementById('btnEditCancel');
+  done.disabled=cancel.disabled=true;
+  try{
+    if(save){
+      if(!currentDrawingTitle) currentDrawingTitle='Untitled';
+      await saveDrawing();                    // the trigger bumps rev
+      dirty=false;
+      const c=popEditContext();
+      /* updateRef re-fetches, keys the new revision on its own and repoints
+         every instance holding position, rotation and on-screen width - and
+         because it is the SHAPES that move, the parent's undo covers it. */
+      await updateRef(c.refKey);
+    }else{
+      popEditContext();
+    }
+    syncChrome(); syncPalette(); render();
+  }catch(err){
+    alert('Could not finish with that object: '+(err.message||err));
+  }
+  done.disabled=cancel.disabled=false;
+}
+document.getElementById('editRefBtn').addEventListener('click',()=>{
+  const grp=selGroup();
+  if(grp.length===1 && grp[0].ref) enterObjectEdit(grp[0]);
+});
+document.getElementById('btnEditDone')  .addEventListener('click',()=>exitObjectEdit(true));
+document.getElementById('btnEditCancel').addEventListener('click',()=>exitObjectEdit(false));
+
 window.addEventListener('keydown',e=>{
   const k=e.key.toLowerCase();
-  if(modalOpen){ if(e.key==='Escape') closeModal(); e.preventDefault(); return; }
+  if(modalOpen){
+    if(e.key==='Escape'){ closeModal(); e.preventDefault(); return; }
+    if(e.target===document.getElementById('modalInput') ||
+       e.target===document.getElementById('modalInput2')) return;  // let the fields be typed
+    e.preventDefault(); return;
+  }
+  // the login and gallery overlays own the keyboard while they are up
+  if(uiScreen!=='draw'){
+    if(e.key==='Escape' && uiScreen==='gallery') goScreen('draw');
+    return;
+  }
   if(e.ctrlKey||e.metaKey){                 // shortcuts first, so "c" is not a tool key
+    // ...but a text field keeps its own clipboard, or Ctrl+V in the library
+    // search box pastes a shape onto the canvas instead of text into the box.
+    if(e.target.tagName==='INPUT' && (k==='c'||k==='v'||k==='x'||k==='a')) return;
     if(k==='z'){ e.preventDefault(); e.shiftKey?redo():undo(); }
     else if(k==='y'){ e.preventDefault(); redo(); }
     else if(k==='c'){ e.preventDefault(); copySelected(); }
@@ -1891,24 +4438,61 @@ window.addEventListener('keydown',e=>{
     else if(k==='d'){ e.preventDefault(); duplicateSelected(); }
     return;
   }
-  if(e.target.tagName==='INPUT') return;    // let the sliders keep their arrow keys
-  if(k==='q') setView(view==='front'?'back':'front');
+  if(e.target.tagName==='INPUT') return;    // let the sliders and the search box keep their keys
+  /* Q and E walk the animation, Tab turns the drawing round, space plays it.
+     Q used to be the front/back switch; it is the frames that you step through
+     constantly now, so they get the pair of keys under your left hand. */
+  if(k==='q'){ pauseAnim(); stepFrame(-1); render(); }
+  else if(k==='e'){ pauseAnim(); stepFrame( 1); render(); }
+  else if(e.key==='Tab'){ e.preventDefault(); toggleView(); render(); }
+  else if(e.key===' '){ e.preventDefault(); togglePlay(); }
   else if(e.key==='1') setTool('brush');
   else if(e.key==='2') setTool('smear');
   else if(e.key==='3') setTool('eraser');
   else if(e.key==='4') setTool('hand');
   else if(k==='h') setShading(shading==='hatch'?'gradient':'hatch');
   else if(e.key==='Delete'||e.key==='Backspace') deleteSelected();
-  else if(e.key==='ArrowUp'){   e.preventDefault(); reorderSel( 1); }
+  else if(e.key==='ArrowUp'){   e.preventDefault(); reorderSel( 1); }   // up/down are depth,
   else if(e.key==='ArrowDown'){ e.preventDefault(); reorderSel(-1); }
+  else if(e.key==='ArrowLeft'){ e.preventDefault(); pauseAnim(); stepFrame(-1); render(); }
+  else if(e.key==='ArrowRight'){e.preventDefault(); pauseAnim(); stepFrame( 1); render(); }
 });
 
 /* ================================================================== boot */
 resize();
+setViewNames('character');    // builds the view switch; the markup only seeds it
+setView(viewNames[0]);
+syncFrames();
 setTool('brush');
 syncHistory();
 syncPalette();
-render();
+startRenderLoop();
+
+/* Restoring a session is asynchronous now - supabase-js reads and refreshes the
+   token itself - so the login screen goes up first with its fields disabled,
+   and the check either signs us straight through or hands the card over. */
+/* Anyone who used the username-only build still has its session object sitting
+   in localStorage under 'cs.session'. Nothing reads it any more, but leaving it
+   there invites a future debugging session to believe the old login is still in
+   play. supabase-js keeps its own token under 'sb-<ref>-auth-token'. */
+try{ localStorage.removeItem('cs.session'); }catch(e){}
+
+const bootHash=location.hash||'';           // read it BEFORE goScreen overwrites it
+goScreen('login');
+(async()=>{
+  try{
+    const c=await db();
+    const {data:{session:tok}}=await c.auth.getSession();
+    if(!tok){ syncLogin(); return; }        // sbLoaded is true by here: enables the form
+    await loadMe();
+    if(bootHash==='#draw') showScreen('draw');
+    else goScreen('gallery');
+  }catch(e){
+    console.warn('Could not restore the session:',e);
+    session=null;
+  }
+  syncLogin();
+})();
 </script>
 </body>
 </html>
