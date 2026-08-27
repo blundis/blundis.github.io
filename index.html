@@ -1505,7 +1505,8 @@ cv.addEventListener('pointerdown',e=>{
 
   // Handles belong to a single shape. With a group up, the only gesture is move.
   if(selected && !extra.length){
-    const corners = localCorners(selected).map(p=>toWorld(selected,p));
+    const corners0 = localCorners(selected);
+    const corners = corners0.map(p=>toWorld(selected,p));
     // A small shape has to keep a core you can grab to MOVE it. At a flat 13/10px
     // the handle and outline-dot pick radii swallow a shape only a few px across
     // whole, so a click plumb in the middle grabbed a point and warped it - the
@@ -1527,7 +1528,15 @@ cv.addEventListener('pointerdown',e=>{
         }else{                                         // others = resize
           const lc=rawCorners(selected);   // unpadded: keeps the anchor corner pinned
           const anchorLocal = lc[(i+2)%4];
+          // Same trap the group rig already documents: the handle is DRAWN at the
+          // padded corner but the maths below puts the BARE corner under the
+          // cursor, so the first move snapped the shape in by the pad - a few
+          // percent on a big shape, a huge jump on a small one. Carry the pad
+          // across as a fixed world offset; it is a constant 10px on screen
+          // whatever the scale, so it does not drift as the shape grows.
+          const pw=toWorld(selected,corners0[i]), rw=toWorld(selected,lc[i]);
           gesture={mode:'resize', cornerLocal:lc[i], anchorLocal:anchorLocal,
+                   pad:{x:pw.x-rw.x, y:pw.y-rw.y},
                    anchorWorld:toWorld(selected,anchorLocal)};
         }
         return;
@@ -1627,7 +1636,7 @@ cv.addEventListener('pointermove',e=>{
   }
   else if(gesture.mode==='resize'){
     const g=gesture;
-    const rel={x:w.x-g.anchorWorld.x, y:w.y-g.anchorWorld.y};
+    const rel={x:w.x-g.pad.x-g.anchorWorld.x, y:w.y-g.pad.y-g.anchorWorld.y};
     const c=Math.cos(-s.rot), n=Math.sin(-s.rot);
     const rx=rel.x*c-rel.y*n, ry=rel.x*n+rel.y*c;
     const dx=g.cornerLocal.x-g.anchorLocal.x, dy=g.cornerLocal.y-g.anchorLocal.y;
