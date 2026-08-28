@@ -88,16 +88,22 @@
      matching #topbar at the top of it: same chrome, same rounding, same blur.
      It sits INSIDE #stage, so it costs the canvas no height and resize(), the
      ResizeObserver and the self-heal at the top of render() are untouched. */
+  /* Two rows: the frame chips on their own, everything else under them. The
+     chips are the thing you aim at constantly and they were being pushed about
+     by the buttons as soon as a drawing had a few frames. */
   #animbar{
     position:absolute;bottom:12px;left:50%;transform:translateX(-50%);
-    display:flex;gap:6px;align-items:center;justify-content:center;z-index:10;
-    flex-wrap:wrap;max-width:calc(100% - 24px);
+    display:flex;flex-direction:column;gap:5px;align-items:center;z-index:10;
+    max-width:calc(100% - 24px);
     background:rgba(35,32,30,.86);backdrop-filter:blur(6px);
     border:1px solid #171513;border-radius:11px;padding:6px;
   }
+  .arow{display:flex;gap:6px;align-items:center;justify-content:center;
+        flex-wrap:wrap;max-width:100%;min-width:0}
   #frames{display:flex;align-items:center;gap:5px;overflow-x:auto;padding:2px;min-width:0;max-width:100%}
   /* the pill is only as wide as its contents, so there is nothing to push apart */
   .aspacer{flex:0 0 auto;width:2px}
+  .chk.locked{opacity:.35;cursor:default}
   .fchip{
     flex:0 0 auto;position:relative;width:46px;height:34px;border-radius:7px;
     border:1px solid #4a4441;background:var(--chrome-3);color:var(--muted);
@@ -337,6 +343,26 @@
   #editWho{font-size:12px;color:var(--ink);white-space:nowrap}
   #editWho b{color:#e8b877}
 
+  /* ---------- the mode switch ---------- */
+  #modeWrap{position:relative}
+  #modeMenu{
+    position:absolute;left:calc(100% + 10px);top:0;z-index:60;
+    display:flex;flex-direction:column;gap:4px;padding:5px;
+    background:var(--chrome-2);border:1px solid #4a4441;border-radius:9px;
+    box-shadow:0 8px 20px rgba(0,0,0,.45);
+  }
+  #modeMenu .mopt{
+    display:flex;align-items:center;gap:9px;white-space:nowrap;cursor:pointer;
+    background:var(--chrome-3);border:1px solid transparent;border-radius:8px;
+    color:var(--ink);font:inherit;font-size:12px;padding:7px 14px 7px 8px;
+  }
+  #modeMenu .mopt:hover{background:#4a4441}
+  #modeMenu .mopt.on{background:#514a45;border-color:var(--accent)}
+  #modeMenu .mopt svg{
+    width:22px;height:22px;flex:0 0 22px;stroke:currentColor;fill:none;
+    stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round;
+  }
+
   /* ---------- the Make Object dropdown ---------- */
   #mkObjWrap{position:relative}
   #mkObjMenu{
@@ -347,15 +373,31 @@
   }
 
   /* ---------- the metadata box ---------- */
-  #metaSec .mrow2{display:flex;flex-direction:column;gap:3px}
-  #metaSec label.cap{font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted)}
-  #metaSec input[type=text]{
+  #metaSec .mrow2,#bonePanel .mrow2{display:flex;flex-direction:column;gap:3px}
+  #metaSec label.cap,#bonePanel label.cap{font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted)}
+  #metaSec input[type=text],#bonePanel input[type=text]{
     background:#191716;border:1px solid #4a4441;border-radius:7px;color:var(--ink);
     font:inherit;font-size:12px;padding:6px 8px;outline:none;min-width:0;
   }
-  #metaSec input[type=text]:focus{border-color:var(--accent)}
-  #metaSec input[type=text]:disabled{opacity:.5;cursor:default}
+  #metaSec input[type=text]:focus,#bonePanel input[type=text]:focus{border-color:var(--accent)}
+  #metaSec input[type=text]:disabled,#bonePanel input[type=text]:disabled{opacity:.5;cursor:default}
   #metaFacts{font-size:11px;color:var(--muted);line-height:1.6}
+  /* ---------- bone mode ---------- */
+  #bonePanel{display:flex;flex-direction:column;gap:11px;min-height:0}
+  #bonePanel .seg button{flex:1;padding:6px 8px;letter-spacing:0}
+  #bonePanel .chk{padding:0}
+  #boneFacts,#boneEmpty,#skinNote,#boneHint{font-size:11px;color:var(--muted);line-height:1.6}
+  #optBSkin .mrow2{display:flex;flex-direction:column;gap:3px}
+  #optBSkin label.cap{font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted)}
+  #skinBone{
+    background:#191716;border:1px solid #4a4441;border-radius:7px;color:var(--ink);
+    font:inherit;font-size:12px;padding:6px 8px;outline:none;min-width:0;
+  }
+  #skinBone:focus{border-color:var(--accent)}
+  #skinBone:disabled{opacity:.5;cursor:default}
+  .pbtn.on{background:var(--accent);border-color:var(--accent);color:#1b1614}
+  .pbtn.on:hover:not(:disabled){background:var(--accent)}
+  #boneSides{gap:10px}
   #ghost{
     position:fixed;width:30px;height:30px;border-radius:8px;pointer-events:none;z-index:999;
     border:2px solid #fff;box-shadow:0 4px 14px rgba(0,0,0,.5);transform:translate(-50%,-50%);display:none;
@@ -377,6 +419,20 @@
 
   <div class="sep"></div>
 
+  <!-- The MODE switch. Like the Gallery above it this is not a tool and must
+       NOT carry data-tool, or setTool's .tool[data-tool] sweep fights it for
+       the active class. Its icon is the mode you are in; the menu is built in
+       JS from MODES and opens to the right of the toolbar. -->
+  <div id="modeWrap">
+    <button class="tool" id="btnMode">
+      <svg id="modeIcon" viewBox="0 0 24 24"></svg>
+      <span class="kbd">5</span><span class="tip" id="modeTip">Mode</span>
+    </button>
+    <div id="modeMenu" class="hidden"></div>
+  </div>
+
+  <div class="sep" id="modeSep"></div>
+
   <div class="logo">TOOLS</div>
 
   <button class="tool active" data-tool="brush">
@@ -397,6 +453,23 @@
   <button class="tool" data-tool="hand">
     <svg viewBox="0 0 24 24"><path d="M9 11V5.6a1.4 1.4 0 0 1 2.8 0V11"/><path d="M11.8 10.6V4.4a1.4 1.4 0 0 1 2.8 0v6.2"/><path d="M14.6 11V6.6a1.4 1.4 0 0 1 2.8 0V14"/><path d="M9 11V9.2a1.4 1.4 0 0 0-2.8 0v6.1c0 3.2 2.4 5.7 5.7 5.7h1.2c3 0 4.3-2 4.3-5"/></svg>
     <span class="kbd">4</span><span class="tip">Hand of Judgement</span>
+  </button>
+
+  <!-- Bone mode REPLACES the drawing tools, so its own three sit in the same
+       slot and the four above hide. data-btool, never data-tool - setTool's
+       sweep must not see them. -->
+  <button class="tool btool hidden" data-btool="bdraw">
+    <svg viewBox="0 0 24 24"><circle cx="6.2" cy="17.8" r="2.6"/><circle cx="14" cy="10" r="2.6"/><path d="M8.1 15.9 12.1 11.9"/><path d="M18.5 4.5v6"/><path d="M15.5 7.5h6"/></svg>
+    <span class="kbd">1</span><span class="tip">Draw Bones</span>
+  </button>
+  <button class="tool btool hidden" data-btool="bskin">
+    <svg viewBox="0 0 24 24"><path d="M4.5 12.5a4 4 0 0 1 4-4h2"/><path d="M19.5 11.5a4 4 0 0 1-4 4h-2"/><path d="M8.5 12h7"/><circle cx="5" cy="17" r="1.6"/><circle cx="19" cy="7" r="1.6"/></svg>
+    <span class="kbd">2</span><span class="tip">Skin shapes to bones</span>
+  </button>
+  <!-- The Hand keeps the key it has in Draw mode, and sits where it sits there. -->
+  <button class="tool btool hidden" data-btool="bhand">
+    <svg viewBox="0 0 24 24"><path d="M9 11V5.6a1.4 1.4 0 0 1 2.8 0V11"/><path d="M11.8 10.6V4.4a1.4 1.4 0 0 1 2.8 0v6.2"/><path d="M14.6 11V6.6a1.4 1.4 0 0 1 2.8 0V14"/><path d="M9 11V9.2a1.4 1.4 0 0 0-2.8 0v6.1c0 3.2 2.4 5.7 5.7 5.7h1.2c3 0 4.3-2 4.3-5"/></svg>
+    <span class="kbd">4</span><span class="tip">Pose bones</span>
   </button>
 
   <div class="sep"></div>
@@ -452,15 +525,21 @@
   </div>
 
   <div id="animbar">
-    <span id="frameOwner" class="hidden"></span>
-    <div id="frames"></div>
-    <div class="aspacer"></div>
-    <label class="chk"><input type="checkbox" id="animOnion" checked> onion</label>
-    <button class="btn" id="btnFrameLeft">Copy Left</button>
-    <button class="btn" id="btnFrameRight">Copy Right</button>
-    <button class="btn" id="btnFrameDup">Duplicate</button>
-    <button class="btn" id="btnPlay">Play<span class="kbd">Space</span></button>
-    <button class="btn" id="btnStop">Stop</button>
+    <div class="arow">
+      <span id="frameOwner" class="hidden"></span>
+      <div id="frames"></div>
+    </div>
+    <div class="arow">
+      <label class="chk"><input type="checkbox" id="animOnion" checked> onion</label>
+      <!-- Posing does not need bone mode: this floats the rig over the ordinary
+           editor as a set of draggable handles. Nothing to show without one. -->
+      <label class="chk" id="skelLbl"><input type="checkbox" id="animSkel"> skeleton</label>
+      <button class="btn" id="btnFrameLeft">Copy Left</button>
+      <button class="btn" id="btnFrameRight">Copy Right</button>
+      <button class="btn" id="btnFrameDup">Duplicate</button>
+      <button class="btn" id="btnPlay">Play<span class="kbd">Space</span></button>
+      <button class="btn" id="btnStop">Stop</button>
+    </div>
   </div>
 </div>
 
@@ -570,6 +649,59 @@
    <div class="divider"></div>
    <button class="pbtn" id="usedFold">Used in this drawing (0) +</button>
    <div id="usedList" class="hidden"></div>
+ </div>
+
+ <!-- Bone mode swaps the WHOLE sidebar, exactly as the Library does, which is
+      how the colour palette goes away for free: it lives in #paintPanel. -->
+ <div id="bonePanel" class="hidden">
+   <h3>Bones</h3>
+   <div class="toolname" id="boneToolName">Draw Bones</div>
+   <div id="boneHint"></div>
+
+   <div class="psec btoolopt" id="optBDraw">
+     <button class="pbtn" id="btnHumanoid">Add humanoid skeleton</button>
+   </div>
+
+   <div class="psec btoolopt" id="optBHand">
+     <button class="pbtn" id="btnResetPose">Reset this frame to rest</button>
+   </div>
+
+   <div class="psec btoolopt" id="optBSkin">
+     <label class="chk"><input type="checkbox" id="skinSplit"> split the skeleton off</label>
+     <div class="mrow2"><label class="cap" for="skinBone">Attach to</label>
+       <select id="skinBone"></select></div>
+     <div class="prow"><button class="pbtn" id="btnAttachBone">Attach to Bone</button></div>
+     <div class="prow">
+       <button class="pbtn" id="btnBindSkel">Auto-Attach</button>
+       <button class="pbtn" id="btnUnbind">Remove</button>
+     </div>
+     <div class="prow"><button class="pbtn" id="btnHideBound">Hide attached shapes</button></div>
+     <div class="slider"><span>Falloff</span><input type="range" id="optBindFall" min="20" max="400" step="5" value="90"><span class="val" id="optBindFallv">90</span></div>
+     <div id="skinNote"></div>
+   </div>
+
+   <div class="divider"></div>
+
+   <div class="psec" id="boneSec">
+     <h3>Selected bone</h3>
+     <div class="mrow2"><label class="cap" for="boneName">Name</label>
+       <input id="boneName" type="text" placeholder="Bone" autocomplete="off" spellcheck="false"></div>
+     <div class="prow" id="boneSides">
+       <label class="chk"><input type="checkbox" id="boneL"> left</label>
+       <label class="chk"><input type="checkbox" id="boneR"> right</label>
+       <label class="chk"><input type="checkbox" id="bonePin"> pin</label>
+     </div>
+     <div class="prow">
+       <label class="chk"><input type="checkbox" id="boneIkt"> IK target</label>
+     </div>
+     <div class="prow">
+       <button class="pbtn" id="boneDup">Duplicate</button>
+       <button class="pbtn" id="boneFlip">Flip</button>
+       <button class="pbtn" id="boneDel">Delete</button>
+     </div>
+     <div id="boneFacts"></div>
+   </div>
+   <div id="boneEmpty">No bone selected.</div>
  </div>
 </div>
 </div><!-- /#main -->
@@ -703,6 +835,72 @@ const paint = c => c===NONE ? 'rgba(0,0,0,0)' : c;   // for gradient stops
 // persistent colour choice - new shapes inherit this
 let current = { outline:'#2E2A28', fill:'#F7C59F', shadow:'#B9713F' };
 
+/* ============================================================== the skeleton
+   The hierarchy is one per DOCUMENT, shared across every view and every frame -
+   front and back of frame 2 are the same moment, so they share one pose exactly
+   as they share one frame index. The POSE is per frame.
+
+   rig      structure only, ordered so a parent always precedes its children
+   bindPose the REST skeleton - what the weights were measured against
+   bonePose one entry per frame; bonePose.length === frameCount() ALWAYS
+
+   A bone's origin is not stored: it is a point in its PARENT's frame - `att`
+   along the parent (a fraction, so it tracks the parent's length) and `off`
+   perpendicular to it (world units). A shoulder wants att 0.85; an ear wants an
+   off. Only a ROOT carries a world x,y, and it carries it in the pose rather
+   than in the structure, so the whole figure can be moved per frame. */
+let rig      = [];    // { id, name, side:''|'L'|'R', parent, att, off, pinned, ikt }
+let bindPose = {};    // boneId -> { len, rot }  (+ x,y on a root).  rot is LOCAL.
+let bonePose = [];    // bonePose[frame][boneId] -> the same shape
+let bid      = 1;     // bone ids are a SEPARATE namespace from the shape uid
+let selBone  = null;
+let boneMode = false;
+let boneTool = 'bdraw';          // 'bdraw' | 'bhand' | 'bskin'
+/* The animation bar's "skeleton" box. It floats the rig over the ORDINARY editor
+   as a set of draggable handles, so posing never needs bone mode - which is only
+   for building a skeleton and skinning to it. */
+let poseOverlay = false;
+/* The Skinning tool's SPLIT view: the artwork slides left and the skeleton
+   right, about the union's own centre, so the two stop overlapping. A bone
+   drawn over a small limb is otherwise both illegible and in the way - which is
+   what boneHit's knobsOnly was working round - and with the columns apart a
+   bone takes a click along its whole length again. It is the only place in this
+   file where what is drawn is not where it lives, so every hit test in bone
+   mode has to undo it; nothing else may. */
+let skinSplit = false;
+/* Hide everything that is already bound, so the shapes you have MISSED are all
+   that is left on screen. Skinning only. */
+let skinHideBound = false;
+// whether the rig is on screen and grabbable at all, wherever that came from
+// ...and while the FIRST bone is being dragged out there is no rig yet, so
+// without the gesture arm the preview line has nothing to draw itself on.
+const rigVisible = () => (boneMode && (rig.length>0 || !!boneGesture)) ||
+                         (poseOverlay && rig.length>0);
+/* Bumped by every rig, bind or pose edit. It is the cache key for skinMats and
+   for the per-shape weights - see the skinning section. */
+let rigRev   = 0;
+/* Bumped only by a STRUCTURE or BIND change, never by a pose one. The per-shape
+   weights are measured against the bind pose, so keying them on rigRev would
+   throw the cache away sixty times a second during a drag. */
+let bindRev  = 0;
+const canRig = () => docKind==='character' || docKind==='item';
+
+/* poseAt is to bonePose what cur() is to views: the render loop is always in
+   flight and must never read undefined out of it. */
+const poseAt   = f => bonePose[f] || {};
+const boneById = id => { for(const b of rig) if(b.id===id) return b; return null; };
+const boneKids = id => rig.filter(b=>b.parent===id);
+function clonePose(p){ const o={}; for(const k of Object.keys(p||{})) o[k]={...p[k]}; return o; }
+/* Every frame carries a pose for every bone, for the same reason every view
+   carries the same number of frames. Called from setViewNames and the frame ops. */
+function fitBonePose(n){
+  const want=Math.max(1, n|0);
+  while(bonePose.length>want) bonePose.pop();
+  while(bonePose.length<want) bonePose.push(clonePose(bonePose[bonePose.length-1]||bindPose));
+  for(const p of bonePose) for(const b of rig) if(!p[b.id]) p[b.id]={...(bindPose[b.id]||{len:1,rot:0})};
+  rigRev++;
+}
+
 /* An imported eye or mouth sheet is an ordinary shape carrying a "ref" field.
    It can be moved, scaled and rotated, but its points, its colours and the
    carving tools are all off: the sheet it came from is the master copy. The
@@ -731,6 +929,7 @@ function dropFromSel(s){
 let drawing = null;     // {pts:[]}
 let carve   = null;     // {shapes}
 let gesture = null;     // {mode, ...}
+let boneGesture = null; // {mode, ...} - bone mode's own, dispatched before the above
 let marquee = null;     // {x0,y0,x1,y1} - the drag box
 let mouse   = {x:-999,y:-999,down:false};
 
@@ -766,7 +965,8 @@ function toLocal(s,w){
   const dx=w.x-s.x, dy=w.y-s.y, c=Math.cos(-s.rot), n=Math.sin(-s.rot);
   return { x:(dx*c - dy*n)/s.sx, y:(dx*n + dy*c)/s.sy };
 }
-const worldPts = s => s.pts.map(p=>toWorld(s,p));
+/* worldPts is defined down in the skinning section: it is the one hook the
+   whole bone deformation hangs off, and it needs boneWorld and the rig. */
 
 function bbox(pts){
   let a=1e9,b=1e9,c=-1e9,d=-1e9;
@@ -1047,7 +1247,9 @@ function drawRefShape(s,opts){
   const fr = refFrames(lib)[fi];
   if(!fr || !fr.length) return;
   ctx.save();
-  ctx.translate(s.x,s.y); ctx.rotate(s.rot); ctx.scale(s.sx,s.sy);
+  // A reference binds to one bone and moves rigidly - see posedPlacement.
+  const pl = posedPlacement(s, o.pframe);
+  ctx.translate(pl.x,pl.y); ctx.rotate(pl.rot); ctx.scale(pl.sx,pl.sy);
   // opts is forwarded near-verbatim: drawShape ASSIGNS globalAlpha rather than
   // multiplying it, so an alpha set out here would be thrown away and the
   // onion skin would draw an imported drawing at full strength. Only depth and
@@ -1061,7 +1263,10 @@ function drawRefShape(s,opts){
 function drawShape(s,opts){
   if(s.ref){ drawRefShape(s,opts); return; }
   const ghost = opts && opts.ghost;
-  const wp = worldPts(s);
+  /* The frame is passed through so the onion of frame n-1 is deformed by frame
+     n-1's pose, and the other view by the current one. Without it both would
+     be posed by whichever frame happens to be showing. */
+  const wp = worldPts(s, opts && opts.pframe);
   if(wp.length<3) return;
   const b = bbox(wp);
   const closed = s.closed!==false;
@@ -1129,7 +1334,9 @@ function drawRotateIcon(x,y){
 }
 /* The group's screen-space box - axis aligned in world space. This is the box
    the flip mirrors about; the rig uses the tilted frame below instead. */
-function groupBox(grp){ return bbox(grp.flatMap(worldPts)); }
+// An arrow, not a bare `worldPts`: it takes a frame as its second argument now
+// and flatMap would hand it the array index.
+function groupBox(grp){ return bbox(grp.flatMap(s=>worldPts(s))); }
 
 /* The group RIG has an angle of its own, so the box turns with the handle you
    are dragging - an upright box while the shapes swing round inside it reads as
@@ -1221,7 +1428,22 @@ function drawDepthBtns(grp){
    sheet. Outside the Hand tool we still outline the selection, because Smear and
    Eraser target it. */
 function drawSelection(s,opts){
-  const o=opts||{}, full=!!(o.handles||o.dots);
+  const o=opts||{};
+  /* A bone-deformed shape gets a plain box round where it ACTUALLY is and no
+     handles at all. localCorners is local space put through toWorld, so the
+     rig would be drawn at the undeformed position - and resize, rotate and warp
+     are edit-at-rest territory anyway, so there is nothing for them to grab. */
+  const bent = deformed(s);
+  const full = !bent && !!(o.handles||o.dots);
+  if(bent){
+    const b=bbox(worldPts(s));
+    ctx.save();
+    ctx.setLineDash([6,5]); ctx.lineWidth=1.4;
+    ctx.strokeStyle='rgba(110,168,255,.55)';
+    ctx.strokeRect(b.x0-4,b.y0-4,b.w+8,b.h+8);
+    ctx.setLineDash([]); ctx.restore();
+    return;
+  }
   const c = localCorners(s).map(p=>toWorld(s,p));
 
   ctx.save();
@@ -1249,6 +1471,38 @@ function drawSelection(s,opts){
   ctx.restore();
 }
 
+/* ------------------------------------------------ the Skinning split view
+   How far the artwork and the skeleton are pushed apart: half the content's own
+   width plus half the gap, each way, measured over the union of the artwork and
+   the rig - so the two columns are clear of one another whatever the drawing is.
+   Zero everywhere except the Skinning tool with the box ticked, and every hit
+   test in bone mode subtracts it back off.
+   Memoised, because it walks every shape's worldPts and the render loop is
+   always in flight. */
+const SPLIT_GAP = 70;
+let splitCache = {key:'', dx:0};
+function splitDX(){
+  if(!(boneMode && boneTool==='bskin' && skinSplit && rig.length)) return 0;
+  const list=cur();
+  const key=view+'|'+frame+'|'+rigRev+'|'+bindRev+'|'+list.length;
+  if(splitCache.key===key) return splitCache.dx;
+  let x0=1e9,x1=-1e9;
+  for(const s of list){ const b=bbox(worldPts(s)); x0=Math.min(x0,b.x0); x1=Math.max(x1,b.x1); }
+  const W=boneWorld(poseAt(frame));
+  for(const b of rig){
+    const w=W.get(b.id); if(!w) continue;
+    const t=boneTip(w);
+    x0=Math.min(x0,w.x,t.x); x1=Math.max(x1,w.x,t.x);
+  }
+  const dx = x1>x0 ? (x1-x0)/2 + SPLIT_GAP/2 : 0;
+  splitCache={key:key, dx:dx};
+  return dx;
+}
+/* A shape the "Hide attached shapes" toggle is currently keeping off screen.
+   It is hidden from the HIT TEST as well, or you would keep selecting things
+   you cannot see. */
+const skinHidden = s => skinHideBound && boneMode && boneTool==='bskin' && !!skinOf(s);
+
 function drawFrame(){
   // self-heal the backing size: the palette panel opening changes the stage width
   if(stage.clientWidth!==Math.round(cv.width/dpr) || stage.clientHeight!==Math.round(cv.height/dpr)) resize();
@@ -1256,6 +1510,12 @@ function drawFrame(){
   drawBackground(w,h);
 
   syncChrome();
+
+  /* Everything from here to the matching restore is the ARTWORK, and in the
+     Skinning split view it is drawn a column to the left of where it lives.
+     The rig gets the same offset the other way, in drawBones. */
+  const SD=splitDX();
+  if(SD){ ctx.save(); ctx.translate(-SD,0); }
   drawEditBackdrop();
 
   /* Two onions, and they are independent. The VIEW onion is how you trace a
@@ -1268,7 +1528,15 @@ function drawFrame(){
   }
   if(onionFrame && frame>0)
     for(const s of (views[view]||[])[frame-1]||[]) drawShape(s,{ghost:true});
-  for(const s of cur()) drawShape(s,{pframe:frame});
+  /* While you are rigging, the artwork is context rather than the subject - it
+     goes grey exactly as an onion does. The Skinning tool is the exception: you
+     are picking shapes with it, so they have to be legible. */
+  const rigging = boneMode && boneTool!=='bskin';
+  for(const s of cur()){
+    if(skinHidden(s)) continue;
+    drawShape(s, rigging ? {pframe:frame, ghost:true} : {pframe:frame});
+  }
+  if(SD) ctx.restore();
 
   if(drawing && drawing.pts.length>1){       // live brush stroke
     ctx.save();
@@ -1308,7 +1576,10 @@ function drawFrame(){
   // One shape gets the editable rig; a group gets a faint box per shape plus
   // one rig round the lot, since resize and rotate now take the whole group.
   // Warping is still the anchor shape's alone, so the dots stay single-shape.
-  const grp=playing ? [] : selGroup();
+  /* tool keeps its old value in bone mode, so without the !boneMode guard
+     entering it with a shape selected leaves the shape rig, the group rig and
+     the depth chevrons drawn over the top of the skeleton. */
+  const grp=(playing||boneMode) ? [] : selGroup();
   const solo = tool==='hand' && grp.length===1;
   for(const g of grp) drawSelection(g, solo ? {handles:true, dots:editable(g)} : null);
   if(grp.length>1 && tool==='hand') drawGroupRig(grp);
@@ -1324,7 +1595,8 @@ function drawFrame(){
     ctx.restore();
   }
 
-  if((tool==='eraser'||tool==='smear') && mouse.x>-500){
+  // ...and the same for the carve disc, which also reads `tool`.
+  if(!boneMode && (tool==='eraser'||tool==='smear') && mouse.x>-500){
     const er = tool==='eraser';
     ctx.save();
     ctx.beginPath(); ctx.arc(mouse.x,mouse.y,er?eraserR:smearR,0,TAU);
@@ -1334,6 +1606,9 @@ function drawFrame(){
     ctx.restore();
   }
 
+  // Bones last: they are drawn on top of the artwork, and while it is playing
+  // the canvas is a viewer, so the rig goes away with the rest of the chrome.
+  if(!playing){ drawSkinOverlay(); drawBones(); drawIKTargets(); }
 }
 
 /* ONE driver, and one only.
@@ -1351,6 +1626,282 @@ function drawFrame(){
    So: drawFrame() is the body, render() only draws, and startRenderLoop() -
    called once, at boot - is the only thing that ever schedules. Every existing
    render() call site keeps working and now costs exactly one extra frame. */
+/* =========================================================== bone geometry
+   Forward kinematics. rig is ordered parents-before-children, so one pass down
+   the list resolves the whole tree: a bone's origin is a point along its parent
+   (att, 1 being the parent's tip) and its world angle is the parent's plus its
+   own local one. Only a root carries a world x,y, and it carries it in the POSE
+   rather than in the structure, so the figure can be moved per frame. */
+function boneWorld(pose){
+  const M=new Map();
+  for(const b of rig){
+    const p=pose[b.id] || bindPose[b.id] || {len:0,rot:0};
+    let x,y,rot;
+    const pw = b.parent!=null ? M.get(b.parent) : null;
+    if(!pw){ x=p.x||0; y=p.y||0; rot=p.rot||0; }   // root, or an orphan treated as one
+    else{
+      // along the parent, then perpendicular to it, both in the parent's frame
+      const t=(b.att==null?1:b.att)*pw.len, o=b.off||0;
+      const c=Math.cos(pw.rot), n=Math.sin(pw.rot);
+      x=pw.x + c*t - n*o;  y=pw.y + n*t + c*o;
+      rot=pw.rot+(p.rot||0);
+    }
+    M.set(b.id,{x:x,y:y,rot:rot,len:p.len||0});
+  }
+  return M;
+}
+const boneTip = w => ({x:w.x+Math.cos(w.rot)*w.len, y:w.y+Math.sin(w.rot)*w.len});
+/* Where a child hanging off `att` of this bone starts. */
+const boneAt  = (w,t) => ({x:w.x+Math.cos(w.rot)*w.len*t, y:w.y+Math.sin(w.rot)*w.len*t});
+
+/* Pick radius for a bone's end circles, capped against the bone the same way
+   pickR caps a shape's handles - a short bone would otherwise be all handle. */
+const BONE_R = 5.5;
+const boneR = w => Math.max(3.5, Math.min(BONE_R+3, w.len*0.25));
+
+/* knobsOnly is what the Skinning tool passes. A bone drawn over a small limb
+   covers the whole shape, so with the body live there was no way to click the
+   artwork underneath it at all - and picking shapes is the entire job of that
+   tool. Its end circles still select a bone, and clicking a bound shape finds
+   its bone anyway. */
+function boneHit(world,p,knobsOnly){
+  /* Tips first and in reverse rig order, so a child's origin (which sits on its
+     parent) wins over the parent's body underneath it. */
+  for(let i=rig.length-1;i>=0;i--){
+    const w=world.get(rig[i].id), r=boneR(w)+3;
+    if(dist(boneTip(w),p)<r) return {bone:rig[i], part:'tip', t:1};
+    if(dist(w,p)<r)          return {bone:rig[i], part:'root', t:0};
+  }
+  if(knobsOnly) return null;
+  for(let i=rig.length-1;i>=0;i--){
+    const w=world.get(rig[i].id), t=boneTip(w);
+    if(w.len>0.5 && segDist(p,w,t) < 7){
+      // where along the bone, for a mid-attachment
+      const dx=t.x-w.x, dy=t.y-w.y, L2=dx*dx+dy*dy;
+      const u=Math.max(0,Math.min(1,((p.x-w.x)*dx+(p.y-w.y)*dy)/L2));
+      return {bone:rig[i], part:'body', t:u};
+    }
+  }
+  return null;
+}
+
+/* ------------------------------------------------------------ drawing them
+   Bones go on top of the artwork. Two circles and a line each; the selected one
+   is amber and its TIP carries an extra ring, because that is where the next
+   bone in the chain will start. Everything is drawn with a dark casing under it
+   so it stays legible over any colour. */
+function drawBones(){
+  if(!rigVisible()) return;
+  const W=boneWorld(poseAt(frame));
+  ctx.save();
+  // the split view's other half: the artwork went left, the rig goes right
+  const SD=splitDX(); if(SD) ctx.translate(SD,0);
+  ctx.lineCap='round'; ctx.lineJoin='round';
+  /* In the Skinning tool the artwork is the subject, so the rig steps back -
+     unless it has been split off to the side, where it is a column of its own
+     and nothing is underneath it to see through it. */
+  if(boneMode && boneTool==='bskin' && !SD) ctx.globalAlpha=0.6;
+
+  const body=(w,on)=>{
+    const t=boneTip(w);
+    if(w.len<0.5) return;
+    ctx.beginPath(); ctx.moveTo(w.x,w.y); ctx.lineTo(t.x,t.y);
+    ctx.lineWidth=(on?5.5:4.2); ctx.strokeStyle='rgba(20,17,15,.72)'; ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(w.x,w.y); ctx.lineTo(t.x,t.y);
+    ctx.lineWidth=(on?3.0:2.0); ctx.strokeStyle=on?'#ffc94d':'#6ea8ff'; ctx.stroke();
+  };
+  /* The ORIGIN knob is solid and the TIP knob is a ring: that is the whole of
+     how you tell which end of a bone you are looking at, and the tip is where
+     the next bone starts. A dark fill made the ring read as another solid dot,
+     so the hollow one is filled with paper instead. */
+  const knob=(p,r,on,filled)=>{
+    ctx.beginPath(); ctx.arc(p.x,p.y,r,0,TAU);
+    ctx.fillStyle = filled ? (on?'#ffc94d':'#6ea8ff') : 'rgba(247,244,238,.92)';
+    ctx.fill();
+    ctx.lineWidth=2.4; ctx.strokeStyle='rgba(20,17,15,.75)'; ctx.stroke();
+    ctx.beginPath(); ctx.arc(p.x,p.y,r,0,TAU);
+    ctx.lineWidth=1.4; ctx.strokeStyle=on?'#ffc94d':'#6ea8ff'; ctx.stroke();
+  };
+
+  for(const b of rig) if(b.id!==selBone){ const w=W.get(b.id);
+    body(w,false); knob(w,boneR(w),false,true); knob(boneTip(w),boneR(w),false,false); }
+
+  const sb = selBone!=null ? boneById(selBone) : null;
+  if(sb){
+    const w=W.get(sb.id), t=boneTip(w), r=boneR(w);
+    /* The scale box, wherever the rig is poseable - the same idea as a shape's
+       rig, with handles only at the far end because a bone's origin belongs to
+       its parent and cannot move. */
+    if(boneTool!=='bdraw' || !boneMode){
+      const cn=boneCorners(w);
+      ctx.beginPath(); ctx.moveTo(cn[0].x,cn[0].y);
+      for(let i=1;i<4;i++) ctx.lineTo(cn[i].x,cn[i].y);
+      ctx.closePath();
+      ctx.setLineDash([5,4]); ctx.lineWidth=1.2;
+      ctx.strokeStyle='rgba(255,201,77,.55)'; ctx.stroke(); ctx.setLineDash([]);
+      for(const h of boneScaleHandles(w)){
+        ctx.beginPath(); ctx.arc(h.x,h.y,5,0,TAU);
+        ctx.fillStyle='#fff'; ctx.fill();
+        ctx.lineWidth=1.6; ctx.strokeStyle='#ffc94d'; ctx.stroke();
+      }
+    }
+    body(w,true); knob(w,r,true,true); knob(t,r,true,false);
+    // the tip is where the next bone starts - say so plainly
+    ctx.beginPath(); ctx.arc(t.x,t.y,r+5,0,TAU);
+    ctx.setLineDash([3,3]); ctx.lineWidth=1.4; ctx.strokeStyle='rgba(255,201,77,.85)';
+    ctx.stroke(); ctx.setLineDash([]);
+    if(sb.pinned){                       // a pin stops the IK solve
+      ctx.beginPath(); ctx.arc(w.x,w.y,r+4,0,TAU);
+      ctx.lineWidth=1.8; ctx.strokeStyle='#e0403a'; ctx.stroke();
+    }
+    /* Offset PERPENDICULAR to the bone, not straight up: on a vertical bone -
+       which is most of a humanoid - straight up drops the label onto the bone. */
+    const lbl=(sb.name||'Bone')+(sb.side?' '+sb.side:'');
+    // clear of the scale box as well as the bone, or it lands on the handles
+    const mp=boneAt(w,0.5), off=r+BONE_PAD+13;
+    const lx=mp.x - Math.sin(w.rot)*off, ly=mp.y + Math.cos(w.rot)*off;
+    ctx.font='600 11px ui-sans-serif,system-ui,sans-serif';
+    ctx.textAlign='center'; ctx.textBaseline='middle';
+    ctx.lineWidth=3.5; ctx.strokeStyle='rgba(20,17,15,.9)';
+    ctx.strokeText(lbl, lx, ly);
+    ctx.fillStyle='#ffc94d'; ctx.fillText(lbl, lx, ly);
+  }
+  // a pinned bone that is NOT selected still has to read as pinned
+  for(const b of rig) if(b.pinned && b.id!==selBone){
+    const w=W.get(b.id);
+    ctx.beginPath(); ctx.arc(w.x,w.y,boneR(w)+4,0,TAU);
+    ctx.lineWidth=1.6; ctx.strokeStyle='rgba(224,64,58,.85)'; ctx.stroke();
+  }
+
+  /* Where the NEXT bone will hang from. With a bone selected, Draw Bones always
+     parents to it - so say so before anything is committed, by running a dotted
+     line from that bone's tip to wherever the new bone is about to start. */
+  const drawing0 = boneGesture && boneGesture.mode==='draw';
+  if(boneMode && boneTool==='bdraw' && sb && mouse.x>-500){
+    const w=W.get(sb.id), from=boneTip(w);
+    // snapped, so the tether collapses to nothing the moment the start joins
+    const to = boneDrawStart(sb.id, drawing0 ? boneGesture.from : mouse);
+    if(dist(from,to)>2){
+      ctx.beginPath(); ctx.moveTo(from.x,from.y); ctx.lineTo(to.x,to.y);
+      ctx.setLineDash([2,5]); ctx.lineWidth=1.5;
+      ctx.strokeStyle='rgba(255,201,77,.75)'; ctx.stroke(); ctx.setLineDash([]);
+      ctx.beginPath(); ctx.arc(to.x,to.y,2.6,0,TAU);
+      ctx.fillStyle='rgba(255,201,77,.9)'; ctx.fill();
+    }
+  }
+
+  // the bone being dragged out right now
+  if(drawing0 && boneGesture.tip){
+    const a=boneDrawStart(boneGesture.parent, boneGesture.from), t=boneGesture.tip;
+    ctx.beginPath(); ctx.moveTo(a.x,a.y); ctx.lineTo(t.x,t.y);
+    ctx.lineWidth=2.4; ctx.setLineDash([5,4]); ctx.strokeStyle='#ffc94d'; ctx.stroke();
+    ctx.setLineDash([]);
+    knob(a,5,true,true); knob(t,5,true,false);
+  }
+  ctx.restore();
+}
+
+/* ------------------------------------------------------------ IK targets
+   A per-bone marker sitting IKT_OFF past the bone's TIP, along the bone's own
+   direction, toggled by "IK target" in the bone panel.
+
+   It is drawn OUTSIDE drawBones on purpose. drawBones returns on rigVisible(),
+   and the whole point of the toggle is that a target stays on screen in Draw
+   mode with the skeleton hidden - so it cannot sit behind that guard. It still
+   takes the split view's rig-side offset, because it hangs off a bone. */
+const IKT_OFF = 26, IKT_R = 6;
+// Where a target sits before it has been placed. Only ever a SEED.
+const ikTargetPos = w => ({ x: w.x + Math.cos(w.rot)*(w.len+IKT_OFF),
+                            y: w.y + Math.sin(w.rot)*(w.len+IKT_OFF) });
+
+/* A goal is a WORLD point, and it is per FRAME: it lives on the pose entry as
+   ikx/iky, so clonePose, snapshot(), the scene's bones.pose, frame duplication
+   and undo all carry it with nothing extra written.
+
+   World rather than bone-relative is the whole point of it. Moving the root -
+   or any bone above the target's own - must NOT carry the target along; the
+   chain solves back to the goal instead, which is what plants a foot while the
+   body moves over it. */
+const ikGoalOf = (b,pose,W) => { const v=pose[b.id];
+  return (v && v.ikx!=null) ? {x:v.ikx, y:v.iky} : ikTargetPos(W.get(b.id)); };
+function seedIKGoal(b,f){
+  const p=poseAt(f), w=boneWorld(p).get(b.id);
+  if(!w || !p[b.id]) return;
+  const t=ikTargetPos(w); p[b.id].ikx=t.x; p[b.id].iky=t.y;
+}
+function seedIKGoalAll(b){ for(let f=0;f<bonePose.length;f++) seedIKGoal(b,f); }
+function clearIKGoal(b){
+  for(const p of bonePose) if(p[b.id]){ delete p[b.id].ikx; delete p[b.id].iky; }
+}
+/* Put every targeted chain back on its goal. Called after ANY pose edit, since
+   all of them move a limb off its target - and NEVER from the render loop: the
+   pose is the document and the painter does not write to it.
+
+   `stopId` is the bone the user is dragging right now, and it acts as a pin: a
+   hand's chain runs all the way up through the spine and the pelvis, so without
+   it enforcing a hand goal would rewrite the very bone being dragged and the
+   gesture would read as dead. Two passes, because solving one limb can shift
+   another off its goal through their shared ancestors. */
+function enforceIKTargets(stopId){
+  if(!rig.some(b=>b.ikt)) return;
+  const p=poseAt(frame);
+  for(let pass=0; pass<2; pass++)
+    for(const b of rig){
+      const v=p[b.id];
+      if(!b.ikt || !v || v.ikx==null) continue;
+      solveIK(b, {x:v.ikx, y:v.iky}, IKT_OFF, stopId);
+    }
+}
+/* A press on a target drives IK. The target is a RIGID extension of the bone,
+   so the solve is the ordinary one with the last segment lengthened by IKT_OFF
+   - which is exactly what dragging the tip does, at a longer lever. */
+function ikTargetHit(world,p){
+  const pose=poseAt(frame);
+  for(let i=rig.length-1;i>=0;i--){
+    if(!rig[i].ikt || !world.get(rig[i].id)) continue;
+    if(dist(ikGoalOf(rig[i],pose,world),p) < IKT_R+4) return rig[i];
+  }
+  return null;
+}
+function drawIKTargets(){
+  if(!rig.length || !rig.some(b=>b.ikt)) return;
+  const pose=poseAt(frame), W=boneWorld(pose);
+  ctx.save();
+  const SD=splitDX(); if(SD) ctx.translate(SD,0);
+  ctx.lineCap='round'; ctx.lineJoin='round';
+  const shown=rigVisible();
+  for(const b of rig){
+    if(!b.ikt) continue;
+    const w=W.get(b.id); if(!w) continue;
+    const p=ikGoalOf(b,pose,W);
+    // ...and the one being dragged lights up even with the skeleton hidden
+    const on = (shown && b.id===selBone) ||
+               (!!boneGesture && boneGesture.mode==='bikt' && boneGesture.bone===b.id);
+    // a dotted leader back to the tip says which bone a target belongs to -
+    // only worth drawing when the bone it points at is on screen
+    if(shown){
+      const t=boneTip(w);
+      ctx.beginPath(); ctx.moveTo(t.x,t.y); ctx.lineTo(p.x,p.y);
+      ctx.setLineDash([2,4]); ctx.lineWidth=1.3;
+      ctx.strokeStyle='rgba(47,191,148,.75)'; ctx.stroke(); ctx.setLineDash([]);
+    }
+    // paper-filled with a dark casing, like the bone knobs, so it reads over
+    // any colour - but a crosshair rather than a plain disc, so it never reads
+    // as one more bone end
+    ctx.beginPath(); ctx.arc(p.x,p.y,IKT_R,0,TAU);
+    ctx.fillStyle='rgba(247,244,238,.92)'; ctx.fill();
+    ctx.lineWidth=2.6; ctx.strokeStyle='rgba(20,17,15,.75)'; ctx.stroke();
+    ctx.lineWidth=1.6; ctx.strokeStyle=on?'#ffc94d':'#2fbf94'; ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(p.x-IKT_R-2,p.y); ctx.lineTo(p.x+IKT_R+2,p.y);
+    ctx.moveTo(p.x,p.y-IKT_R-2); ctx.lineTo(p.x,p.y+IKT_R+2);
+    ctx.lineWidth=3.2; ctx.strokeStyle='rgba(20,17,15,.75)'; ctx.stroke();
+    ctx.lineWidth=1.5; ctx.strokeStyle=on?'#ffc94d':'#2fbf94'; ctx.stroke();
+  }
+  ctx.restore();
+}
+
+
 function render(){ drawFrame(); }
 function startRenderLoop(){ (function loop(){ drawFrame(); requestAnimationFrame(loop); })(); }
 
@@ -1370,14 +1921,25 @@ function snapshot(){
   // inert. That is also why an Update keys a NEW refLib entry and repoints the
   // shapes at it rather than mutating the entry in place - the repointing lives
   // in the shapes, so it lands in here for free.
-  return JSON.stringify({views:v, view:view, frame:frame, sel:selGroup().map(g=>g.id)});
+  /* The skeleton rides along in here too. It is a few KB against a whole
+     document stringify, and carrying all three of rig/bind/pose is what makes
+     every bone edit an ordinary undoable one with nothing extra written -
+     a snapshot that forgets one of them looks fine until you redo. */
+  return JSON.stringify({views:v, view:view, frame:frame, sel:selGroup().map(g=>g.id),
+                         rig:rig, bind:bindPose, pose:bonePose, selBone:selBone});
 }
 function restore(str){
   const snap=JSON.parse(str);
   for(const n of viewNames) views[n]=snap.views[n]||[[]];
   frame=Math.max(0,Math.min(frameCount()-1, snap.frame||0));
+  /* Before setView, which clears selBone - and the pose is clamped to the frame
+     count the views above have just decided, so it can never come back short. */
+  rig=snap.rig||[]; bindPose=snap.bind||{}; bonePose=snap.pose||[];
+  fitBonePose(frameCount()); bumpBind();
+  const wantBone=snap.selBone;
   setView(snap.view);
   syncFrames();
+  selBone = wantBone!=null && boneById(wantBone) ? wantBone : null;
   const ids=snap.sel||[];
   const back=ids.map(id=>cur().find(s=>s.id===id)).filter(Boolean);
   selected=back[0]||null; extra=back.slice(1);
@@ -1418,6 +1980,7 @@ function pickR(minDim, full){ return Math.max(3, Math.min(full, minDim*0.25)); }
 function shapeAt(w){
   const list=cur();
   for(let i=list.length-1;i>=0;i--){
+    if(skinHidden(list[i])) continue;      // not on screen, so not clickable
     buildFill(ctx, worldPts(list[i]), list[i].closed!==false);   // click the fill, chord included
     if(ctx.isPointInPath(w.x,w.y)) return list[i];
   }
@@ -1426,7 +1989,10 @@ function shapeAt(w){
 function outlineNear(w,tol){
   const list=cur();
   for(let i=list.length-1;i>=0;i--){
-    if(!editable(list[i])) continue;      // a reference has no outline to carve; look under it
+    /* warpable, not editable: a shape displaced by a bone has no honest local
+       space to write a carve back into, so the tools look past it to whatever
+       is underneath - the same thing they already do with a reference. */
+    if(!warpable(list[i])) continue;
     for(const p of worldPts(list[i])) if(dist(p,w)<tol) return list[i];
   }
   return null;
@@ -1447,6 +2013,30 @@ cv.addEventListener('pointerdown',e=>{
   const w=pos(e); mouse.down=true; mouse.x=w.x; mouse.y=w.y;
   // Back to the paint sidebar: a click on the canvas is the end of a pick.
   if(closeLibrary()) syncPalette();
+
+  /* Bone mode owns the canvas outright - it REPLACES the drawing tools, so
+     nothing below this line may run while it is up. */
+  if(boneMode){ bonePointerDown(w,e); return; }
+
+  /* The skeleton overlay is the opposite bargain: the rig is just a set of
+     handles floating over the ordinary editor, so it claims a press only when
+     one actually lands on a bone and everything else falls through to whatever
+     tool is up. */
+  /* An IK target is grabbable wherever it is DRAWN, which includes Draw mode
+     with the skeleton hidden - that is what the toggle is for. Tested before
+     the overlay's bones and before any tool, and it costs nothing at all when
+     no bone has one. */
+  if(rig.length && rig.some(b=>b.ikt)){
+    const BW=boneWorld(poseAt(frame));
+    const it=ikTargetHit(BW,w);
+    if(it){ ikTargetDown(w,it); return; }
+  }
+
+  if(poseOverlay && rig.length){
+    const BW=boneWorld(poseAt(frame));
+    const hit=boneHit(BW,w);
+    if(hit){ boneHandDown(w,hit,BW); return; }
+  }
 
   if(tool==='brush'){
     drawing={pts:[w], len:0};
@@ -1545,7 +2135,9 @@ cv.addEventListener('pointerdown',e=>{
 
     // 2. outline points -> soft warp. Never on a reference: those points are the
     //    sheet's, and the corner handles above stay live so it can still be placed.
-    if(editable(selected)){
+    //    Never on a bone-deformed shape either: the warp writes back through
+    //    toLocal, which knows nothing about the deformation.
+    if(warpable(selected)){
       const wp=worldPts(selected);
       const wR=pickR(minDim,10);
       for(let i=0;i<wp.length;i++){
@@ -1581,6 +2173,8 @@ cv.addEventListener('pointerdown',e=>{
 
 cv.addEventListener('pointermove',e=>{
   const w=pos(e); mouse.x=w.x; mouse.y=w.y;
+
+  if(boneMode || boneGesture){ bonePointerMove(w); return; }
 
   if(drawing){
     const last=drawing.pts[drawing.pts.length-1];
@@ -1660,6 +2254,7 @@ cv.addEventListener('pointermove',e=>{
 });
 
 function endStroke(){
+  if(boneMode || boneGesture){ bonePointerUp(); mouse.down=false; return; }
   if(carve && carve.mode==='smear')
     for(const s of carve.shapes) smearPolish(s, carve.polish.get(s));
   if(drawing){ finishBrush(drawing.pts); drawing=null; }
@@ -2211,7 +2806,12 @@ function applyColor(which,hex,target){
 
 const TOOL_NAMES={brush:'Brush', smear:'Smear', eraser:'Eraser', hand:'Hand of Judgement'};
 const TOOL_PANELS={brush:'optBrush', smear:'optSmear', eraser:'optEraser', hand:'optHand'};
-let paletteMode='paint';       // 'paint' | 'library' - the sidebar swaps wholesale
+/* The bone tools are deliberately NOT values of `tool`: syncPalette does
+   getElementById(TOOL_PANELS[tool]) and throws on anything not in that map. */
+const esc = s => String(s==null?'':s).replace(/[<&]/g,c=>c==='<'?'&lt;':'&amp;');
+const BTOOL_NAMES ={bdraw:'Draw Bones', bhand:'Hand of Judgement', bskin:'Skinning'};
+const BTOOL_PANELS={bdraw:'optBDraw',   bhand:'optBHand',          bskin:'optBSkin'};
+let paletteMode='paint';       // 'paint' | 'library' | 'bones' - the sidebar swaps wholesale
 
 /* The library is a picker, not a mode to live in: touching the canvas or
    reaching for a tool means you are done with it, so it drops back to the
@@ -2221,6 +2821,82 @@ function closeLibrary(){
   if(paletteMode!=='library') return false;
   paletteMode='paint';
   return true;
+}
+
+/* Bone mode is a mode you live in, not a picker - so unlike the Library it is
+   only ever left deliberately: by the button, by reaching for a drawing tool, or
+   by a load. It swaps the whole sidebar, which is what takes the colour palette
+   away, and it is only offered where a rig means anything. */
+function enterBoneMode(){
+  if(!canRig() || boneMode) return;
+  boneMode=true; boneTool='bdraw'; paletteMode='bones';
+  pauseAnim(); clearSel();
+  /* Both onions off: the artwork is already greyed out for rigging, and a
+     ghosted view or frame on top of the skeleton reads as more of it. The
+     frame one is unreachable anyway while the animation bar is hidden. They
+     stay off on the way out - it is a default, not a stashed setting. */
+  onionOn=false; onionFrame=false;
+  document.getElementById('onion').checked=false;
+  document.getElementById('animOnion').checked=false;
+  syncPalette(); render();
+}
+function exitBoneMode(){
+  if(!boneMode) return false;
+  boneMode=false; selBone=null; boneGesture=null;
+  if(paletteMode==='bones') paletteMode='paint';
+  return true;
+}
+/* ------------------------------------------------------- the mode switch
+   The toolbar's second button. It shows the mode you are IN rather than the
+   one it would take you to, and its menu opens to the right of the toolbar -
+   the toolbar is 74px wide and a menu inside it could not name anything. The
+   entries are built from here so a mode's icon exists in exactly one place. */
+const MODES=[
+  {id:'draw', label:'Draw', tip:'Mode: Draw',
+   svg:'<path d="M4 20c0-3 2-4 3.5-4.5"/><path d="M8.5 15.5c-2 .8-3 2.2-3.2 4.2 2.2-.2 3.6-1.2 4.4-3.2"/><path d="M9.7 16.5 7.5 14.3 16 5.8a1.6 1.6 0 0 1 2.2 0l.5.5a1.6 1.6 0 0 1 0 2.2Z"/>'},
+  {id:'skeleton', label:'Skeleton', tip:'Mode: Skeleton',
+   svg:'<circle cx="6.4" cy="6.4" r="2.6"/><circle cx="17.6" cy="17.6" r="2.6"/><path d="M8.4 8.4 15.6 15.6"/><circle cx="6.4" cy="17.6" r="2.2"/><path d="M8.5 16.4 15.9 9"/>'}
+];
+let modeMenuOpen=false;
+const curMode = () => boneMode ? 'skeleton' : 'draw';
+function setMode(id){
+  modeMenuOpen=false;
+  if(id===curMode()){ syncPalette(); render(); return; }
+  if(id==='skeleton') enterBoneMode(); else exitBoneMode();
+  syncPalette(); render();
+}
+function buildModeMenu(){
+  document.getElementById('modeMenu').innerHTML = MODES.map(m=>
+    '<button class="mopt" data-mode="'+m.id+'"><svg viewBox="0 0 24 24">'+m.svg+
+    '</svg><span>'+esc(m.label)+'</span></button>').join('');
+}
+/* Called from syncPalette, so the button follows the mode however it was
+   changed - the menu, the 5 key, or a load that dropped bone mode. */
+function syncModeBtn(){
+  const on = canRig();
+  if(!on) modeMenuOpen=false;
+  document.getElementById('modeWrap').classList.toggle('hidden',!on);
+  document.getElementById('modeSep') .classList.toggle('hidden',!on);
+  const m = MODES.find(x=>x.id===curMode()) || MODES[0];
+  const icon=document.getElementById('modeIcon');
+  if(icon.dataset.mode!==m.id){ icon.innerHTML=m.svg; icon.dataset.mode=m.id; }
+  document.getElementById('modeTip').textContent=m.tip;
+  // setTool's .tool[data-tool] sweep never touches this button, so nothing
+  // else will ever take the class off it.
+  document.getElementById('btnMode').classList.toggle('active', boneMode||modeMenuOpen);
+  const menu=document.getElementById('modeMenu');
+  menu.classList.toggle('hidden',!modeMenuOpen);
+  menu.querySelectorAll('.mopt').forEach(b=>
+    b.classList.toggle('on', b.dataset.mode===m.id));
+}
+
+function setBoneTool(t){
+  if(!BTOOL_PANELS[t]) return;
+  boneTool=t;
+  // The shape selection means something only to Skinning; the other two would
+  // leave a stale group behind the greyed art.
+  if(t!=='bskin') clearSel();
+  syncPalette(); render();
 }
 
 /* An eye or mouth object's frames are named expressions, and the animation bar
@@ -2339,14 +3015,1001 @@ function syncPalette(){
   });
 
   /* Last, so it wins over everything the per-tool block above just un-hid: the
-     library is a mode for the whole panel, and it only exists on a character. */
+     library and bone mode are modes for the WHOLE panel, and both only exist on
+     a kind that can hold them. Bone mode hiding #paintPanel is also how the
+     colour palette goes away - it lives inside it. */
   const onChar = canImport();
-  const lib = paletteMode==='library' && onChar;
+  const lib   = paletteMode==='library' && onChar;
+  const bones = paletteMode==='bones'   && canRig();
   const btn = document.getElementById('btnLibrary');
   btn.classList.toggle('hidden',!onChar);
   btn.classList.toggle('active',lib);
-  document.getElementById('paintPanel').classList.toggle('hidden', lib);
+  syncModeBtn();
+  /* Bone mode REPLACES the drawing tools, so none of them may sit there lit
+     while it is up. setTool puts the class back on the way out - and clicking
+     one is itself the way out, which is why they stay live rather than being
+     disabled outright. */
+  /* Bone mode REPLACES the drawing tools: they hide and its own three take the
+     same slot in the toolbar. The bone button itself stays put, so there is
+     always a way back out. */
+  document.querySelectorAll('.tool[data-tool]').forEach(b=>{
+    b.classList.toggle('hidden', bones);
+    b.classList.toggle('active', !bones && b.dataset.tool===tool);
+  });
+  document.querySelectorAll('.btool').forEach(b=>{
+    b.classList.toggle('hidden', !bones);
+    b.classList.toggle('active', bones && b.dataset.btool===boneTool);
+  });
+  document.getElementById('paintPanel').classList.toggle('hidden', lib||bones);
   document.getElementById('libPanel')  .classList.toggle('hidden',!lib);
+  document.getElementById('bonePanel') .classList.toggle('hidden',!bones);
+  if(bones) syncBonePanel();
+}
+
+/* ------------------------------------------------------- the bone sidebar */
+const BTOOL_HINTS={
+  bdraw:'Drag to make a bone. With one selected the new bone becomes its CHILD, and a dotted line shows where it will hang from - drag anywhere to set both ends. Click a bone to select it, or empty paper to start a new root.',
+  bhand:'Drag a bone to pose it: the body solves the chain, the end circle swings it. The corner handles scale it.',
+  bskin:'Click a shape to select it, then a bone to attach it to. The bones only take a click on their end circles here, so shapes underneath stay reachable.'
+};
+function syncBonePanel(){
+  document.getElementById('boneToolName').textContent=BTOOL_NAMES[boneTool];
+  document.getElementById('boneHint').textContent=BTOOL_HINTS[boneTool]||'';
+  document.querySelectorAll('.btoolopt').forEach(el=>el.classList.add('hidden'));
+  document.getElementById(BTOOL_PANELS[boneTool]).classList.remove('hidden');
+
+  const b = selBone!=null ? boneById(selBone) : null;
+  document.getElementById('boneSec')  .classList.toggle('hidden',!b);
+  document.getElementById('boneEmpty').classList.toggle('hidden',!!b);
+  document.getElementById('boneEmpty').textContent = rig.length
+    ? 'No bone selected.' : 'No bones yet - drag on the canvas to draw one.';
+  if(b){
+    document.getElementById('boneName').value = b.name||'';
+    document.getElementById('boneL').checked  = b.side==='L';
+    document.getElementById('boneR').checked  = b.side==='R';
+    document.getElementById('bonePin').checked= !!b.pinned;
+    document.getElementById('boneIkt').checked= !!b.ikt;
+    const p=poseAt(frame)[b.id]||{len:0,rot:0};
+    const kids=boneKids(b.id).length;
+    document.getElementById('boneFacts').innerHTML=
+      'parent: '+(b.parent!=null ? esc((boneById(b.parent)||{}).name||'?') : 'none (root)')+'<br>'+
+      'children: '+kids+' &middot; length: '+Math.round(p.len||0)+'px<br>'+
+      'attaches at: '+(b.parent!=null
+        ? Math.round((b.att||0)*100)+'% along the parent'+
+          (Math.abs(b.off||0)>0.5 ? ', '+Math.round(Math.abs(b.off))+'px off it' : '')
+        : 'the canvas');
+  }
+  syncSkinPanel();
+}
+
+/* ==================================================== editing the skeleton
+   Draw Bones edits the REST skeleton: it writes bindPose AND the same values
+   into every frame's pose, so building and fixing a skeleton never deforms
+   anything. The Hand writes only the current frame's pose - that is the half
+   that deforms. Keeping the two apart is what makes either predictable. */
+function setBoneRest(id,v){
+  bindPose[id]={...v};
+  // the goal is pose data and survives a rest edit; Draw Bones does not re-solve
+  for(const p of bonePose){ const g=p[id];
+    p[id]={...v};
+    if(g && g.ikx!=null){ p[id].ikx=g.ikx; p[id].iky=g.iky; } }
+  bumpBind();
+}
+// Structure or bind moved: the weights are stale as well as the matrices.
+function bumpBind(){ bindRev++; rigRev++; }
+function boneSubtree(id){
+  const out=[], q=[id];
+  while(q.length){ const c=q.shift(); const b=boneById(c); if(!b) continue;
+                   out.push(b); for(const k of boneKids(c)) q.push(k.id); }
+  return out;                       // breadth first, so parents precede children
+}
+/* Every shape in the document, across every view and every frame - bones are
+   document-wide, so pruning one has to reach all of them. cur() is no use here:
+   it returns a fresh [] on a miss and the loop would silently do nothing. */
+function allShapes(){
+  const out=[];
+  for(const v of viewNames) for(const fr of (views[v]||[])) for(const s of (fr||[])) out.push(s);
+  return out;
+}
+function pruneSkin(deadIds){
+  const dead=new Set(deadIds);
+  for(const s of allShapes()){
+    if(!s.skin) continue;
+    s.skin.bones=(s.skin.bones||[]).filter(b=>!dead.has(b));
+    if(!s.skin.bones.length) delete s.skin;
+  }
+  bumpBind();
+}
+
+/* Both ends come off the drag, and the PARENT comes off the selection rather
+   than off where you pressed - so a chain is drawn by keeping the last bone
+   selected, and a bone can start anywhere rather than being snapped onto its
+   parent. Wherever the start lands is resolved into the parent's own frame as
+   (att along, off perpendicular). */
+function addBone(parentId, start, end){
+  const ang=Math.atan2(end.y-start.y, end.x-start.x), len=dist(start,end);
+  const b={ id:bid++, name:'Bone '+(rig.length+1), side:'', parent:parentId,
+            att:1, off:0, pinned:false };
+  const v={ len:len, rot:ang };
+  if(parentId==null){ v.x=start.x; v.y=start.y; }
+  else{
+    // computed BEFORE the push, so boneWorld's single pass does not meet a bone
+    // that has no pose entry yet
+    const pw=boneWorld(bindPose).get(parentId);
+    if(pw){
+      const dx=start.x-pw.x, dy=start.y-pw.y;
+      const c=Math.cos(-pw.rot), n=Math.sin(-pw.rot);
+      b.att = pw.len>0.0001 ? (dx*c - dy*n)/pw.len : 1;
+      b.off = dx*n + dy*c;
+      v.rot = ang - pw.rot;                        // stored LOCAL to the parent
+    }
+  }
+  /* Pushed to the END of rig, always. The parent is by definition already in
+     the array, so a push can never break the parents-before-children order that
+     boneWorld's single pass relies on. */
+  rig.push(b);
+  setBoneRest(b.id, v);
+  return b;
+}
+/* Where a child hangs off its parent, and at what angle to it - the two numbers
+   the IK polyline needs, since with an `off` the joint no longer lies along the
+   parent's own axis. */
+function jointOf(child, parentLen){
+  const a=(child.att==null?1:child.att)*parentLen, o=child.off||0;
+  return { len:Math.hypot(a,o), ang:Math.atan2(o,a) };
+}
+
+function deleteBone(id){
+  if(id==null) return;
+  const sub=boneSubtree(id);
+  if(!sub.length) return;
+  const go=()=>{
+    pushUndo();
+    const dead=sub.map(b=>b.id);
+    rig=rig.filter(b=>dead.indexOf(b.id)<0);
+    for(const d of dead){ delete bindPose[d]; for(const p of bonePose) delete p[d]; }
+    /* The shapes do NOT move: they are stored at rest all along, so losing a
+       bone simply stops deforming them. */
+    pruneSkin(dead);
+    selBone=null; bumpBind();
+    syncPalette(); render();
+  };
+  if(sub.length>1)
+    openModal({ title:'Delete '+sub.length+' bones?',
+      body:'"'+(boneById(id).name||'Bone')+'" has '+(sub.length-1)+' bone'+(sub.length>2?'s':'')+
+           ' hanging off it. They go too. Anything skinned to them is simply unskinned.',
+      buttons:[{label:'Delete',primary:true,danger:true,onClick:go},{label:'Cancel'}] });
+  else go();
+}
+
+/* Mirroring. A CHILD mirrors about its parent's axis, which is exactly what
+   turns a left arm into a right one, so negating its local rot is the whole
+   operation. A ROOT has no parent axis to mirror about, so it reflects about
+   the canvas centre line instead - the same thing Flip H does to a shape. */
+function mirrorBones(list){
+  const cx=cv.getBoundingClientRect().width/2;
+  const set=new Set(list.map(b=>b.id));
+  for(const b of list){
+    b.side = b.side==='L' ? 'R' : b.side==='R' ? 'L' : '';
+    const detached = b.parent==null || !set.has(b.parent);   // the head of what is moving
+    for(const p of [bindPose].concat(bonePose)){
+      const v=p[b.id]; if(!v) continue;
+      if(detached && b.parent==null){ v.rot=Math.PI-v.rot; if(v.x!=null) v.x=2*cx-v.x; }
+      else v.rot=-v.rot;
+    }
+  }
+  bumpBind();
+}
+function flipBone(id){
+  if(id==null) return;
+  pushUndo();
+  mirrorBones(boneSubtree(id));
+  syncPalette(); render();
+}
+/* A duplicate keeps the same parent and the same attachment point, and comes
+   out mirrored - which is what makes it the way you build a second arm. The
+   whole subtree comes with it, or a duplicated arm would arrive with no hand. */
+function duplicateBone(id){
+  if(id==null) return;
+  const sub=boneSubtree(id);
+  if(!sub.length) return;
+  pushUndo();
+  const map=new Map(), made=[];
+  for(const b of sub){                       // breadth first, so a parent is mapped first
+    const c={ id:bid++, name:b.name, side:b.side,
+              parent: b.parent!=null && map.has(b.parent) ? map.get(b.parent) : b.parent,
+              att:b.att, off:b.off||0, pinned:b.pinned, ikt:!!b.ikt };
+    map.set(b.id,c.id); rig.push(c); made.push(c);
+    bindPose[c.id]={...(bindPose[b.id]||{len:0,rot:0})};
+    for(let i=0;i<bonePose.length;i++) bonePose[i][c.id]={...(bonePose[i][b.id]||bindPose[c.id])};
+  }
+  mirrorBones(made);
+  // a copied goal would sit on the ORIGINAL's target and haul the mirrored limb onto it
+  for(const c of made) if(c.ikt) seedIKGoalAll(c);
+  selBone=made[0].id;
+  syncPalette(); render();
+}
+
+/* ------------------------------------------------------- humanoid skeleton
+   Authored as WORLD rest angles (0 = +x, positive clockwise because canvas y is
+   down) and converted to local on the way in - hand-authoring locals down a
+   chain is where the sign errors live. Lengths are fractions of the canvas
+   height. The pelvis doubles as the lower spine bone, which is the second spine
+   bone without a redundant root.
+
+   It is an A-pose, not a stick: the first version splayed the limbs by only a
+   few degrees - enough to keep the IK off a degenerate collinear chain, which
+   was the whole reason for the splay - and drew as a single vertical line you
+   could not tell an arm from a leg in. Arms 35 degrees off vertical and legs 12
+   read as a figure and still start the solver off-axis. */
+const HUMANOID=[
+  ['Pelvis',   '', null,          1,    -90, 0.11],
+  ['Spine',    '', 'Pelvis',      1,    -90, 0.10],
+  ['Neck',     '', 'Spine',       1,    -90, 0.04],
+  ['Head',     '', 'Neck',        1,    -90, 0.12],
+  ['Upper arm','L','Spine',       0.85,  55, 0.10],
+  ['Forearm',  'L','Upper arm L', 1,     70, 0.09],
+  ['Hand',     'L','Forearm L',   1,     76, 0.045],
+  ['Upper arm','R','Spine',       0.85, 125, 0.10],
+  ['Forearm',  'R','Upper arm R', 1,    110, 0.09],
+  ['Hand',     'R','Forearm R',   1,    104, 0.045],
+  ['Thigh',    'L','Pelvis',      0,     78, 0.13],
+  ['Shin',     'L','Thigh L',     1,     86, 0.12],
+  ['Foot',     'L','Shin L',      1,     35, 0.04],
+  ['Thigh',    'R','Pelvis',      0,    102, 0.13],
+  ['Shin',     'R','Thigh R',     1,     94, 0.12],
+  ['Foot',     'R','Shin R',      1,    145, 0.04]
+];
+function addHumanoid(){
+  pushUndo();
+  const r=cv.getBoundingClientRect(), H=r.height, W=r.width;
+  const by=new Map();                 // "Name Side" -> {id, world}
+  for(const row of HUMANOID){
+    const name=row[0], side=row[1], par=row[2], att=row[3], deg=row[4], fl=row[5];
+    const world=deg*Math.PI/180, len=fl*H;
+    const p = par!=null ? by.get(par) : null;
+    const b={ id:bid++, name:name, side:side, parent:p?p.id:null, att:att, off:0, pinned:false };
+    rig.push(b);
+    const v={ len:len, rot: p ? world-p.world : world };
+    if(!p){ v.x=W/2; v.y=0.55*H; }
+    setBoneRest(b.id, v);
+    by.set(name+(side?' '+side:''), {id:b.id, world:world});
+  }
+  selBone=by.get('Pelvis').id;
+  syncPalette(); render();
+}
+function resetPose(){
+  if(!rig.length) return;
+  pushUndo();
+  bonePose[frame]=clonePose(bindPose);
+  // the goals go back to rest with the pose, or they would drag it straight out again
+  for(const b of rig) if(b.ikt) seedIKGoal(b,frame);
+  rigRev++;
+  syncPalette(); render();
+}
+
+/* ------------------------------------------------- the Hand: posing and IK
+   This writes bonePose[frame] and NOTHING else. The shapes are stored at rest
+   and deformed on the way out through worldPts, so there is nothing to bake
+   and posing can never damage the artwork - Reset pose is exact.
+
+     tip drag   rotate and lengthen that one bone (FK)
+     body drag  the cursor snaps to the bone's tip and the chain solves (IK)
+     a root     drags the whole figure about instead; it has no chain to solve
+
+   Every move is recomputed from a snapshot taken at pointerdown, exactly as
+   grotate/gresize already do. Sixty incremental deltas a second accumulate
+   float drift into the pose, and the pose is the document. */
+
+/* The chain that a drag on B moves: B and its ancestors, up to the nearest
+   pinned bone. Two things stop the walk early -
+     a PIN, which is what pins are for; and
+     a joint whose segment has no LENGTH, which happens whenever a bone attaches
+     at att 0 of its parent - both thighs of the humanoid do. The polyline FABRIK
+     works on cannot represent a zero-length segment: its direction is undefined,
+     so writing an angle back from it would spin the parent to atan2(0,0). Which
+     is also the behaviour you want anyway: dragging a foot should solve the leg,
+     not swing the pelvis. */
+function ikChain(B,stopId){
+  const chain=[B], P=poseAt(frame);
+  let c=B;
+  while(!c.pinned && c.parent!=null){
+    const p=boneById(c.parent);
+    // stopId is the bone under the cursor: an enforced goal may not rewrite it
+    if(!p || p.pinned || p.id===stopId) break;
+    if(jointOf(c, (P[p.id]||{len:0}).len||0).len < 1) break;   // no segment to rotate
+    chain.unshift(p); c=p;
+  }
+  return chain;
+}
+
+/* `extra` lengthens the LAST segment, which is how an IK target drives the
+   chain: the target is rigidly attached to B at IKT_OFF past its tip, so the
+   effector is that point rather than the tip. The extension is collinear with
+   the bone, so the write-back angle for the last link is unchanged (phi[m] is
+   0 either way) and nothing else in the solve has to know. */
+const IK_ITERS = 10;
+function solveIK(B,target,extra,stopId){
+  const p=poseAt(frame);
+  const chain=ikChain(B,stopId), m=chain.length-1;
+  const W=boneWorld(p);
+  const pts=[];
+  for(let i=0;i<=m;i++){ const w=W.get(chain[i].id); pts.push({x:w.x,y:w.y}); }
+  pts.push(extra ? ikTargetPos(W.get(chain[m].id)) : boneTip(W.get(chain[m].id)));
+  /* With an `off` a joint no longer sits on its parent's own axis, so the
+     polyline segment stands at a fixed angle to the bone. phi is that angle,
+     and it is what the write-back has to subtract - without it an offset bone
+     would be rotated to point AT its child instead of along itself. */
+  const d=[], phi=[]; let total=0;
+  for(let i=0;i<=m;i++){
+    d.push(dist(pts[i],pts[i+1])); total+=d[i];
+    phi.push(i<m ? jointOf(chain[i+1], W.get(chain[i].id).len).ang : 0);
+  }
+  const base={x:pts[0].x, y:pts[0].y};
+  const step=(a,b,len)=>{ const dx=b.x-a.x, dy=b.y-a.y, L=Math.hypot(dx,dy);
+                          if(L<1e-9) return {x:a.x,y:a.y};
+                          return {x:a.x+dx/L*len, y:a.y+dy/L*len}; };
+
+  if(dist(base,target)>total){
+    // out of reach: straighten the whole chain at it, one pass and done
+    for(let i=0;i<=m;i++) pts[i+1]=step(pts[i],target,d[i]);
+  }else{
+    for(let it=0; it<IK_ITERS && dist(pts[m+1],target)>0.5; it++){
+      pts[m+1]={x:target.x, y:target.y};                       // backward
+      for(let i=m;i>=0;i--) pts[i]=step(pts[i+1],pts[i],d[i]);
+      pts[0]={x:base.x, y:base.y};                             // forward
+      for(let i=0;i<=m;i++) pts[i+1]=step(pts[i],pts[i+1],d[i]);
+    }
+  }
+
+  /* Root-down, so each bone's parent has already been updated by the time its
+     own local angle is worked out. chain[i+1].parent is chain[i] by
+     construction; chain[0]'s parent is outside the chain and has not moved.
+     Lengths are never touched by IK. */
+  let pw = chain[0].parent!=null ? (W.get(chain[0].parent)||{rot:0}).rot : 0;
+  for(let i=0;i<=m;i++){
+    if(d[i]<1e-6){ pw = pw + (p[chain[i].id].rot||0); continue; }   // undefined direction
+    const ang=Math.atan2(pts[i+1].y-pts[i].y, pts[i+1].x-pts[i].x) - phi[i];
+    p[chain[i].id].rot = ang - pw;
+    pw = ang;
+  }
+  rigRev++;
+}
+
+/* Grabbing an IK target, from wherever it was pressed - bone mode's Hand, the
+   skeleton overlay, or Draw mode with the skeleton hidden, which is the whole
+   point of the toggle. */
+function ikTargetDown(w,b){
+  selBone=b.id;
+  pushUndo();
+  boneGesture={ mode:'bikt', bone:b.id, grab:{x:w.x,y:w.y},
+                pose0:clonePose(poseAt(frame)) };
+  syncPalette(); render();
+}
+function boneHandDown(w,hit,W){
+  /* The scale handles first, and they belong to the SELECTED bone alone - they
+     stand outside its box, so nothing else can want that spot. */
+  if(selBone!=null && boneById(selBone)){
+    const sw=W.get(selBone);
+    if(sw){
+      const hs=boneScaleHandles(sw), r=Math.max(6, Math.min(11, sw.len*0.25));
+      for(const h of hs) if(dist(h,w)<r){
+        pushUndo();
+        boneGesture={ mode:'bscale', bone:selBone, grab:{x:w.x,y:w.y},
+                      pose0:clonePose(poseAt(frame)) };
+        syncPalette(); render(); return;
+      }
+    }
+  }
+  if(!hit){ selBone=null; boneGesture=null; syncPalette(); render(); return; }
+  selBone=hit.bone.id;
+  pushUndo();
+  const root = hit.bone.parent==null;
+  boneGesture={
+    mode: hit.part==='tip' ? 'bfk' : (root ? 'bmove' : 'bik'),
+    bone: hit.bone.id, grab:{x:w.x,y:w.y},
+    pose0: clonePose(poseAt(frame))       // recomputed from THIS every move
+  };
+  syncPalette(); render();
+}
+
+function boneHandMove(w){
+  const g=boneGesture;
+  if(!g || g.mode==='draw') return;
+  const b=boneById(g.bone); if(!b) return;
+  const p=poseAt(frame);
+  for(const k of Object.keys(g.pose0)) if(p[k]) p[k]={...g.pose0[k]};   // back to the grab
+  rigRev++;
+
+  if(g.mode==='bmove'){
+    const v=p[b.id];
+    v.x=(g.pose0[b.id].x||0)+(w.x-g.grab.x);
+    v.y=(g.pose0[b.id].y||0)+(w.y-g.grab.y);
+    rigRev++;
+  }else if(g.mode==='bfk'){
+    /* ROTATE ONLY - the length is not touched. Dragging the end used to set it
+       from the cursor distance, which scaled every shape on the bone as a side
+       effect of aiming a limb. Scaling is its own gesture now, on the box.
+       The origin does not depend on this bone's own rot or len, only on its
+       ancestors, so it is stable through the drag. */
+    const W=boneWorld(p), o=W.get(b.id);
+    const pw = b.parent!=null ? (W.get(b.parent)||{rot:0}).rot : 0;
+    p[b.id].rot = Math.atan2(w.y-o.y, w.x-o.x) - pw;
+    rigRev++;
+  }else if(g.mode==='bscale'){
+    // along the bone's own axis from its pinned origin, so the origin never moves
+    const W=boneWorld(p), o=W.get(b.id);
+    const c=Math.cos(o.rot), n=Math.sin(o.rot);
+    p[b.id].len = Math.max(4, (w.x-o.x)*c + (w.y-o.y)*n);
+    rigRev++;
+  }else if(g.mode==='bikt'){
+    // the drag IS the goal: write it into the pose, then solve to it
+    const v=p[b.id]; if(v){ v.ikx=w.x; v.iky=w.y; }
+    solveIK(b,w,IKT_OFF);       // the effector is the target, not the tip
+  }else{
+    solveIK(b,w);
+  }
+  /* This bone's OWN target follows the gesture - it is a handle on the bone and
+     would otherwise fight it - and then every other target pulls its chain back
+     onto its goal, with this bone held. */
+  if(g.mode!=='bikt' && b.ikt) seedIKGoal(b,frame);
+  enforceIKTargets(b.id);
+  render();
+}
+
+/* -------------------------------------------------------- the Skinning tool
+   The bone selection and the shape selection are live at the same time and are
+   independent, which is the whole trick:
+
+     click a bone   -> select it, AND select every shape it influences
+     click a shape  -> select it; if it is bound, move the bone selection to its
+                       strongest bone. If it is UNBOUND, leave the bone selection
+                       alone - that is what makes Attach reachable, because the
+                       way to attach is: click the bone, shift-click the shapes,
+                       press Attach. */
+let bindFalloff = 90;
+const SKIN_MIN_PTS = 24;   // below this a weighted shape hinges instead of bending
+const SKIN_MAXBONES = 4;   // per shape, for bones picked by DISTANCE (a guess)
+/* ...and a far higher one for bones that actually run THROUGH the shape, which
+   are not a guess. A 4-bone cap silently dropped the last bone of any chain
+   longer than four - and since equal coverage keeps rig order, the one it threw
+   away was always the far END of the chain, so the tip of a long arm or tail sat
+   there refusing to follow the bone plainly inside it. What keeps the blend
+   local and cheap is the per-POINT cap (SKIN_MAXB), not this one. */
+const SKIN_MAXBONES_IN = 12;
+
+function boneSkinDown(w,hit,e){
+  boneGesture=null;
+  if(hit){
+    selBone=hit.bone.id;
+    const g=cur().filter(s=>{ const sk=skinOf(s); return sk && sk.bones.indexOf(hit.bone.id)>=0; });
+    selected=g[0]||null; extra=g.slice(1);
+    syncPalette(); render(); return;
+  }
+  // knobsOnly above means the bones no longer swallow a press over a small limb
+  const SD=splitDX();                 // the artwork is drawn a column to the LEFT
+  const s=shapeAt(SD?{x:w.x+SD,y:w.y}:w);
+  if(s){
+    const add = !!(e && e.shiftKey);
+    if(add){
+      if(inSel(s)) dropFromSel(s);
+      else if(selected) extra.push(s);
+      else selected=s;
+    }else{ selected=s; extra=[]; }
+    /* A bound shape moves the bone selection to its own bone - that is how you
+       ask "what is this on?". But NOT while a selection is being built up: a
+       shift-click that happened to land on something bound elsewhere used to
+       throw away the bone you had just aimed at, and the whole attach had to be
+       started again. */
+    const sk=skinOf(s);
+    if(sk && !add) selBone=sk.bones[0];   // bones[0] is the strongest by construction
+  }else if(!e || !e.shiftKey){ clearSel(); }
+  syncPalette(); render();
+}
+
+/* Which bones actually run THROUGH the shape, by coverage. This is what fixes a
+   wide shape with one bone up the middle - a torso's outer points are nearer
+   the arm bones than the spine, so a plain nearest-distance bind gave it four
+   influences and warped it whenever an arm moved. A bone that passes through a
+   shape owns it; one that merely passes nearby does not. */
+function bonesInside(s,B){
+  const wp=s.pts.map(p=>toWorld(s,p));
+  if(wp.length<3) return [];
+  buildFill(ctx, wp, s.closed!==false);       // the same path shapeAt hit-tests
+  const out=[], N=10;
+  for(const b of rig){
+    const w=B.get(b.id); if(!w || w.len<1) continue;
+    let n=0;
+    for(let i=0;i<=N;i++){ const q=boneAt(w,i/N); if(ctx.isPointInPath(q.x,q.y)) n++; }
+    if(n) out.push({id:b.id, cov:n/(N+1)});
+  }
+  out.sort((a,b)=>b.cov-a.cov);
+  return out;
+}
+
+/* Every bone whose rest position comes within `fall` of the shape, nearest
+   first. Measured against the BIND pose, which is the frame the weights belong
+   to. A shape out of range of everything still gets the single nearest bone -
+   a shape you asked to bind must end up bound. */
+function bonesScored(s,B){
+  const wp=s.pts.map(p=>toWorld(s,p));
+  const scored=[];
+  for(const b of rig){
+    const w=B.get(b.id); if(!w) continue;
+    const t=boneTip(w);
+    let d=1e9; for(const p of wp) d=Math.min(d, segDist(p,w,t));
+    scored.push({id:b.id,d:d});
+  }
+  scored.sort((a,b)=>a.d-b.d);
+  return scored;
+}
+function bonesNear(s,B,fall){
+  const scored=bonesScored(s,B);
+  if(!scored.length) return [];
+  const keep=scored.filter(x=>x.d<=fall).slice(0,SKIN_MAXBONES);
+  return (keep.length?keep:[scored[0]]).map(x=>x.id);
+}
+
+function attachToBone(){
+  const g=selGroup();
+  if(!g.length || selBone==null || !boneById(selBone)) return;
+  pushUndo();
+  // falloff 0 is the rigid case: one bone, weight 1, and the blend in worldPts
+  // reduces exactly to the closed-form composition.
+  for(const s of g) s.skin={bones:[selBone], falloff:0};
+  bumpBind(); syncPalette(); render();
+}
+function bindToSkeleton(){
+  const g=selGroup();
+  if(!g.length || !rig.length) return;
+  pushUndo();
+  const B=boneWorld(bindPose);
+  for(const s of g){
+    /* A reference's pts are its placement box, not an outline, so it cannot be
+       point-deformed: one bone, rigid, always. */
+    if(s.ref){ const n=bonesNear(s,B,1e9); s.skin={bones:[n[0]], falloff:0}; continue; }
+
+    /* Bones running through the shape win outright, and a single one of those
+       makes it RIGID rather than weighted - which is the whole answer for a
+       torso, a limb or a head. Only when several bones share the shape is it
+       weighted, and then only among those. Nothing inside it at all (a hand
+       blob sitting off the end of its bone) falls back to plain distance. */
+    /* Relative to the BEST coverage, not an absolute bar. A torso straddles the
+       waist, so the two spine bones cover 0.45 each and a flat 0.5 threshold
+       rejected both and dropped the shape back to plain distance - which is
+       exactly the four-bone mis-bind this test is about. The floor keeps out a
+       bone that merely clips a corner. */
+    const all=bonesInside(s,B);
+    const best=all.length?all[0].cov:0;
+    const inside=all.filter(x=>x.cov>=Math.max(0.15, 0.6*best));
+    let bones, fall;
+    if(inside.length===1){ bones=[inside[0].id]; fall=0; }
+    else if(inside.length>1){ bones=inside.slice(0,SKIN_MAXBONES_IN).map(x=>x.id); fall=bindFalloff; }
+    else{
+      /* Nothing runs through it. That is the END of a limb - a hand, a foot, the
+         last taper of a long thin arm - which the bone stops just short of, and
+         it is the case Auto-Attach kept getting wrong: at plain distance the
+         forearm, the upper arm and half the torso are all "near" a small blob
+         out on the end of a chain, so it came back weighted across the lot and
+         the tip of the arm went soft. A bone that all but touches the shape -
+         within a GRIP measured against the shape's own thin dimension, so it
+         scales with the drawing - owns it outright and rigidly, exactly as a
+         bone running through it would. */
+      const scored=bonesScored(s,B);
+      const bb=bbox(s.pts.map(p=>toWorld(s,p)));
+      const grip=Math.max(6, 0.5*Math.min(bb.w,bb.h));
+      if(scored.length && scored[0].d<=grip){ bones=[scored[0].id]; fall=0; }
+      else{ bones=bonesNear(s,B,bindFalloff); fall = bones.length>1 ? bindFalloff : 0; }
+    }
+    if(!bones.length) continue;
+
+    /* A weighted shape needs points to bend with - a six-point ribbon over
+       three bones hinges rather than curving. Densified under the same undo. */
+    if(bones.length>1 && s.pts.length<SKIN_MIN_PTS){
+      const perim=pathLength(s.pts)+(s.closed!==false?dist(s.pts[s.pts.length-1],s.pts[0]):0);
+      s.pts=resample(s.pts, Math.max(2, perim/SKIN_MIN_PTS), s.closed!==false);
+    }
+    s.skin={bones:bones, falloff:fall};
+  }
+  bumpBind(); syncPalette(); render();
+}
+function unbindSelection(){
+  const g=selGroup().filter(s=>s.skin);
+  if(!g.length) return;
+  pushUndo();
+  for(const s of g) delete s.skin;
+  bumpBind(); syncPalette(); render();
+}
+
+const boneLabel = b => (b.name||'Bone')+(b.side?' '+b.side:'');
+function syncSkinPanel(){
+  if(boneTool!=='bskin') return;
+  const g=selGroup();
+  const b=selBone!=null?boneById(selBone):null;
+  const bound=g.filter(s=>skinOf(s));
+  document.getElementById('btnAttachBone').disabled = !(g.length && b);
+  document.getElementById('btnBindSkel')  .disabled = !(g.length && rig.length);
+  document.getElementById('btnUnbind')    .disabled = !bound.length;
+
+  /* The target bone as a LIST as well as a canvas click. Picking one used to
+     mean leaving the tool for the Hand, selecting it there and coming back -
+     and any stray click on a bound shape sent you round again. */
+  const sel=document.getElementById('skinBone');
+  const key=rig.map(x=>x.id+':'+boneLabel(x)).join('|');
+  if(sel.dataset.key!==key){
+    sel.dataset.key=key;
+    sel.innerHTML='<option value="">— none —</option>'+
+      rig.map(x=>'<option value="'+x.id+'">'+boneLabel(x)+'</option>').join('');
+  }
+  sel.value = b ? String(b.id) : '';
+  sel.disabled = !rig.length;
+
+  /* The hint depends on the split, which syncBonePanel does not know about:
+     with the columns apart a bone takes a press anywhere along it. */
+  if(splitDX()) document.getElementById('boneHint').textContent =
+    'The artwork is on the left and the skeleton on the right. Click shapes on one side and bones - anywhere along them - on the other, then Attach.';
+
+  const split=document.getElementById('skinSplit');
+  split.checked = skinSplit && !!rig.length;
+  split.disabled = !rig.length;
+  const hb=document.getElementById('btnHideBound');
+  hb.textContent = skinHideBound ? 'Show attached shapes' : 'Hide attached shapes';
+  hb.classList.toggle('on', skinHideBound);
+
+  const note=document.getElementById('skinNote');
+  const hidden = skinHideBound ? ' '+cur().filter(s=>skinOf(s)).length+' attached shape(s) hidden.' : '';
+  note.textContent = (
+    !rig.length ? 'Draw some bones first.' :
+    !g.length   ? (b ? 'Nothing skinned to "'+boneLabel(b)+'" yet. Click shapes to select them.'
+                     : 'Click a bone to see what is on it, or a shape to see its bone.') :
+    !b          ? g.length+' shape'+(g.length>1?'s':'')+' selected. Click a bone to attach to.' :
+    g.length+' shape'+(g.length>1?'s':'')+' → "'+boneLabel(b)+'". '+
+      bound.length+' already bound. Rig frame 0, then Duplicate Frame - skinning lives on the shape, and frames hold different shapes.'
+  )+hidden;
+}
+function setSkinSplit(on){
+  skinSplit=!!on; splitCache={key:'',dx:0};
+  clearSel();                 // the columns move, and a box drawn round the old
+  syncPalette(); render();    // position of a shape reads as a bug
+}
+function setHideBound(on){
+  skinHideBound=!!on;
+  if(skinHideBound) for(const s of selGroup().slice()) if(skinOf(s)) dropFromSel(s);
+  syncPalette(); render();
+}
+
+/* What is bound to what. Only in the Skinning tool, and only worth the cost
+   there: the points are tinted by their dominant bone and faded by its weight,
+   which is the only way to see WHY a bend looks wrong. */
+const boneHue = id => { let i=rig.findIndex(b=>b.id===id); return (i<0?0:i)*47 % 360; };
+function drawSkinOverlay(){
+  if(!boneMode || boneTool!=='bskin') return;
+  /* drawFrame suppresses ALL the ordinary selection chrome in bone mode - it
+     reads `tool`, which still holds whatever drawing tool you were on, so the
+     resize rig and the depth chevrons would come back with it. The Skinning
+     tool still has to show what is selected, so it draws its own plain box. */
+  /* The whole overlay is artwork-side, so it takes the artwork's offset. The
+     one exception is the tether, whose far end is on a bone - and the rig is a
+     column the other way, hence the 2*SD below. */
+  const SD=splitDX();
+  ctx.save();
+  if(SD) ctx.translate(-SD,0);
+  ctx.setLineDash([6,5]); ctx.lineWidth=1.5; ctx.strokeStyle='#6ea8ff';
+  for(const g of selGroup()){
+    if(skinHidden(g)) continue;
+    const b=bbox(worldPts(g));
+    ctx.strokeRect(b.x0-4,b.y0-4,b.w+8,b.h+8);
+  }
+  ctx.setLineDash([]);
+  ctx.restore();
+  if(!rig.length) return;
+  const W=boneWorld(poseAt(frame));
+  ctx.save();
+  if(SD) ctx.translate(-SD,0);
+  for(const s of cur()){
+    const sk=skinOf(s); if(!sk || skinHidden(s)) continue;
+    const wp=worldPts(s), ws=skinWeights(s);
+    if(sk.bones.length===1){
+      ctx.fillStyle='hsla('+boneHue(sk.bones[0])+',75%,52%,.85)';
+      for(const p of wp){ ctx.beginPath(); ctx.arc(p.x,p.y,2.1,0,TAU); ctx.fill(); }
+    }else{
+      for(let i=0;i<wp.length;i++){
+        const top=ws[i].slice().sort((a,b)=>b.w-a.w)[0];
+        ctx.fillStyle='hsla('+boneHue(top.b)+',75%,52%,'+(0.3+0.6*top.w).toFixed(2)+')';
+        ctx.beginPath(); ctx.arc(wp[i].x,wp[i].y,2.4,0,TAU); ctx.fill();
+      }
+    }
+    // a tether to the strongest bone, so a shape's owner reads at a glance
+    const c=bbox(wp), w0=W.get(sk.bones[0]);
+    if(w0){
+      const m=boneAt(w0,0.5);
+      ctx.beginPath(); ctx.moveTo(c.cx,c.cy); ctx.lineTo(m.x+2*SD,m.y);
+      ctx.setLineDash([2,4]); ctx.lineWidth=1;
+      ctx.strokeStyle='hsla('+boneHue(sk.bones[0])+',70%,45%,.5)';
+      ctx.stroke(); ctx.setLineDash([]);
+    }
+  }
+  ctx.restore();
+}
+
+document.getElementById('skinSplit').addEventListener('change',e=>setSkinSplit(e.target.checked));
+document.getElementById('btnHideBound').addEventListener('click',()=>setHideBound(!skinHideBound));
+document.getElementById('skinBone').addEventListener('change',e=>{
+  const id=e.target.value===''?null:+e.target.value;
+  selBone = (id!=null && boneById(id)) ? id : null;
+  syncPalette(); render();
+});
+document.getElementById('btnAttachBone').addEventListener('click',attachToBone);
+document.getElementById('btnBindSkel')  .addEventListener('click',bindToSkeleton);
+document.getElementById('btnUnbind')    .addEventListener('click',unbindSelection);
+bindSlider('optBindFall','optBindFallv',v=>bindFalloff=v);
+
+/* ------------------------------------------------- bone mode pointer input */
+/* The scale box round a selected bone. Handles only at the TIP end: a bone's
+   origin is decided by its parent and must stay put, so scaling can only ever
+   run along the bone from a pinned origin. Rotating is the tip drag. */
+const BONE_PAD=9;
+function boneCorners(w){
+  const h=boneR(w)+BONE_PAD, L=Math.max(w.len,1);
+  const c=Math.cos(w.rot), n=Math.sin(w.rot);
+  return [{x:-BONE_PAD,y:-h},{x:L+BONE_PAD,y:-h},{x:L+BONE_PAD,y:h},{x:-BONE_PAD,y:h}]
+    .map(p=>({x:w.x+p.x*c-p.y*n, y:w.y+p.x*n+p.y*c}));
+}
+const boneScaleHandles = w => { const c=boneCorners(w); return [c[1],c[2]]; };
+
+function bonePointerDown(w,e){
+  const W=boneWorld(poseAt(frame));
+  /* In the split view the rig is drawn a column to the right of where it lives,
+     so the cursor has to be brought back before it is tested against it - and
+     with the columns apart nothing is underneath a bone any more, so it takes a
+     press along its whole body again rather than only on its end circles. */
+  const SD=splitDX();
+  const hit=boneHit(W, SD?{x:w.x-SD,y:w.y}:w, boneTool==='bskin' && !SD);
+  if(boneTool==='bdraw'){
+    /* The PARENT is whatever is selected, not whatever you pressed on - so a
+       chain draws by keeping the last bone selected and dragging again, and the
+       dotted line in drawBones says so before you commit. Both ends come off
+       the drag, so a child can start clear of its parent. A press that does not
+       travel is a plain selection instead, which is how you branch or start a
+       new root. */
+    boneGesture={ mode:'draw', hit:hit,
+                  parent: (selBone!=null && boneById(selBone)) ? selBone : null,
+                  from:   w, tip: null };
+    return;
+  }
+  if(boneTool==='bhand'){
+    const it=ikTargetHit(W, SD?{x:w.x-SD,y:w.y}:w);
+    if(it){ ikTargetDown(w,it); return; }
+    boneHandDown(w,hit,W); return;
+  }
+  boneSkinDown(w,hit,e);
+}
+function bonePointerMove(w){
+  if(!boneGesture) return;
+  if(boneGesture.mode==='draw'){ boneGesture.tip=w; return; }
+  boneHandMove(w);
+}
+const MIN_BONE=8;      // a press that does not travel this far is a selection
+const BONE_SNAP=14;    // ...and one starting this close to its parent's tip joins it
+/* Where a new bone drawn from `from` really starts. Both ends of a new bone
+   come off the drag, so a child can hang clear of its parent - but the common
+   case is a chain, and a start a few px off the parent's tip leaves the joint
+   nearly-shared rather than shared (att slightly off 1, a stray off). Within
+   BONE_SNAP it lands exactly on the tip, which is what addBone resolves to
+   att 1, off 0. Measured against the BIND pose because that is what addBone
+   itself resolves against - Draw Bones edits the rest skeleton. */
+function boneDrawStart(parentId, from){
+  if(parentId==null || !from) return from;
+  const pw=boneWorld(bindPose).get(parentId);
+  if(!pw) return from;
+  const t=boneTip(pw);
+  return dist(from,t)<BONE_SNAP ? t : from;
+}
+function bonePointerUp(){
+  const g=boneGesture; boneGesture=null;
+  if(!g) return;
+  if(g.mode==='draw'){
+    if(!g.tip || dist(g.from,g.tip)<MIN_BONE){        // a click: just select
+      selBone = g.hit ? g.hit.bone.id : null;
+    }else{
+      pushUndo();
+      const b=addBone(g.parent, boneDrawStart(g.parent, g.from), g.tip);
+      selBone=b.id;                                   // so the chain keeps drawing
+    }
+  }
+  syncPalette(); render();
+}
+
+/* ------------------------------------------------------ the bone controls */
+function commitBoneName(){
+  const b=selBone!=null&&boneById(selBone); if(!b) return;
+  const v=document.getElementById('boneName').value.trim();
+  if(!v || v===b.name) return;
+  pushUndo(); b.name=v; rigRev++; render();
+}
+function setBoneSide(side){
+  const b=selBone!=null&&boneById(selBone); if(!b) return;
+  const next = b.side===side ? '' : side;   // the two boxes are exclusive
+  if(next===b.side){ syncBonePanel(); return; }
+  pushUndo(); b.side=next; rigRev++;
+  syncBonePanel(); render();
+}
+function setBonePin(on){
+  const b=selBone!=null&&boneById(selBone); if(!b || !!b.pinned===!!on) return;
+  pushUndo(); b.pinned=!!on; rigRev++;
+  syncBonePanel(); render();
+}
+/* An IK target is a marker, not a pose: it changes nothing about how the bone
+   solves, so it does not touch rigRev's meaning beyond making the rig redraw. */
+function setBoneIkt(on){
+  const b=selBone!=null&&boneById(selBone); if(!b || !!b.ikt===!!on) return;
+  pushUndo(); b.ikt=!!on;
+  /* Seed the goal in EVERY frame, not just this one. A frame left without one
+     would fall back to the derived position and so drift with its parents -
+     which is exactly the behaviour the explicit goal exists to stop. */
+  if(b.ikt) seedIKGoalAll(b); else clearIKGoal(b);
+  rigRev++;
+  syncBonePanel(); render();
+}
+document.getElementById('boneName').addEventListener('change',commitBoneName);
+document.getElementById('boneName').addEventListener('blur',commitBoneName);
+document.getElementById('boneL').addEventListener('change',()=>setBoneSide('L'));
+document.getElementById('boneR').addEventListener('change',()=>setBoneSide('R'));
+document.getElementById('bonePin').addEventListener('change',e=>setBonePin(e.target.checked));
+document.getElementById('boneIkt').addEventListener('change',e=>setBoneIkt(e.target.checked));
+document.getElementById('boneDup') .addEventListener('click',()=>duplicateBone(selBone));
+document.getElementById('boneFlip').addEventListener('click',()=>flipBone(selBone));
+document.getElementById('boneDel') .addEventListener('click',()=>deleteBone(selBone));
+document.getElementById('btnHumanoid') .addEventListener('click',addHumanoid);
+document.getElementById('btnResetPose').addEventListener('click',resetPose);
+
+/* =============================================================== skinning
+   Shapes are stored AT REST and deformed when they are read. Baking a pose into
+   the shape is not available here: weighted skinning gives every point its own
+   matrix, which {x,y,rot,sx,sy} cannot hold, and baking into pts would destroy
+   the bind pose the weights are measured against - the second drag would then
+   compute its delta from already-deformed geometry and the errors compound with
+   no rest shape to come back to.
+
+   What makes render-time deformation cheap is that every per-point world
+   coordinate in this file already goes through worldPts. Teach that one
+   function and shapeAt (through buildFill), drawShape, the selection chrome,
+   groupBox, finishMarquee, flipSelected, the export crop and the thumbnails are
+   all correct for nothing.
+
+   A shape carries { skin: { bones:[id,...], falloff } } and nothing else. The
+   WEIGHTS are derived, never stored: per-point-per-bone floats would be
+   re-stringified by snapshot() on every gesture, sixty deep in each of two
+   stacks - the same argument that keeps refLib out of a snapshot. */
+
+const SKIN_EPS = 1.5;      // a point sitting exactly on a bone must not divide by zero
+const SKIN_MAXB = 2;       // influences kept per point
+const MIN_BONE_K = 0.06;   // toLocal divides by sx/sy; a zero-length bone would NaN everything
+
+function skinOf(s){
+  if(!s || !s.skin || !s.skin.bones || !s.skin.bones.length) return null;
+  const bs=s.skin.bones.filter(id=>boneById(id)!=null);
+  if(!bs.length) return null;                 // dangling ids read as unbound
+  return { bones:bs, falloff: s.skin.falloff||0 };
+}
+
+/* D = M_pose . M_bind^-1 per bone, as a similarity:
+      D(p) = o_pose + k . R(dtheta) . (p - o_bind)
+   Memoised on (frame, rigRev) and computed ONCE per drawFrame - never per
+   shape, which is the difference between this costing nothing and costing the
+   render loop. */
+let _matKey='', _mats=null;
+function skinMats(f){
+  const key=f+':'+rigRev;
+  if(key===_matKey && _mats) return _mats;
+  const B=boneWorld(bindPose), P=boneWorld(poseAt(f));
+  const M=new Map();
+  for(const b of rig){
+    const ob=B.get(b.id), op=P.get(b.id);
+    if(!ob||!op) continue;
+    const k = ob.len>0.0001 ? Math.max(MIN_BONE_K, op.len/ob.len) : 1;
+    const d = op.rot-ob.rot, c=Math.cos(d), n=Math.sin(d);
+    M.set(b.id,{
+      c:c, n:n, k:k,
+      tx: op.x - k*(c*ob.x - n*ob.y),
+      ty: op.y - k*(n*ob.x + c*ob.y),
+      // at rest this is the identity and worldPts can return the raw points
+      id: Math.abs(d)<1e-12 && Math.abs(k-1)<1e-12 &&
+          Math.abs(op.x-ob.x)<1e-9 && Math.abs(op.y-ob.y)<1e-9
+    });
+  }
+  _matKey=key; _mats=M;
+  return M;
+}
+const applyD = (D,p) => ({ x: D.k*(D.c*p.x - D.n*p.y) + D.tx,
+                           y: D.k*(D.n*p.x + D.c*p.y) + D.ty });
+
+/* Weights depend on the BIND pose and on the rig's structure, never on the
+   current pose - so they are keyed on bindRev and survive a whole drag. Held in
+   a WeakMap rather than on the shape: a field would be carried straight into
+   sceneToJSON's stringify and into every undo snapshot. */
+const skinCache = new WeakMap();
+function skinWeights(s){
+  const sk=skinOf(s);
+  if(!sk) return null;
+  const key=bindRev+':'+s.pts.length+':'+sk.bones.join(',')+':'+sk.falloff;
+  const hit=skinCache.get(s);
+  if(hit && hit.key===key) return hit.w;
+
+  const B=boneWorld(bindPose);
+  const segs=sk.bones.map(id=>{ const w=B.get(id); return {id:id, a:w, b:boneTip(w)}; });
+  const out=[];
+  for(const p of s.pts){
+    const wp=toWorld(s,p);                    // rest world - the frame the weights belong to
+    let ds=segs.map(g=>({id:g.id, d:Math.max(SKIN_EPS, segDist(wp,g.a,g.b))}));
+    ds.sort((x,y)=>x.d-y.d);
+    /* Inside the falloff, nearest SKIN_MAXB by inverse square. A point outside
+       every bone's falloff still gets the single nearest one: a shape that is
+       bound must stay bound, or part of it would be left behind when the rest
+       of it moved. */
+    let use=ds.filter(x=> !sk.falloff || x.d<=sk.falloff).slice(0,SKIN_MAXB);
+    if(!use.length) use=[ds[0]];
+    let tot=0; const ws=use.map(x=>{ const v=1/(x.d*x.d); tot+=v; return {b:x.id, w:v}; });
+    for(const x of ws) x.w/=tot;
+    out.push(ws);
+  }
+  skinCache.set(s,{key:key, w:out});
+  return out;
+}
+
+/* The one hook. NOTE the explicit second parameter: three call sites used to
+   read `grp.flatMap(worldPts)`, which would hand this the ARRAY INDEX as a
+   frame. They pass an arrow now. */
+function worldPts(s, f){
+  const raw=s.pts.map(p=>toWorld(s,p));
+  const sk=skinOf(s);
+  if(!sk || !rig.length) return raw;
+  const M=skinMats(f==null?frame:f);
+  let moved=false;
+  for(const id of sk.bones){ const D=M.get(id); if(D && !D.id){ moved=true; break; } }
+  if(!moved) return raw;                      // at rest, and this is the common case
+  const W=skinWeights(s);
+  return raw.map((p,i)=>{
+    const ws=W[i];
+    let x=0,y=0,tot=0;
+    for(const e of ws){
+      const D=M.get(e.b); if(!D) continue;
+      const q=applyD(D,p); x+=q.x*e.w; y+=q.y*e.w; tot+=e.w;
+    }
+    return tot>0 ? {x:x/tot, y:y/tot} : p;
+  });
+}
+
+/* Whether a shape is currently displaced from where it was drawn. Point editing
+   writes back through toLocal, which knows nothing about any of this, so Smear,
+   Eraser and the outline warp are off while it is true - Reset pose is the way
+   through. */
+function deformed(s,f){
+  const sk=skinOf(s);
+  if(!sk) return false;
+  const M=skinMats(f==null?frame:f);
+  for(const id of sk.bones){ const D=M.get(id); if(D && !D.id) return true; }
+  return false;
+}
+const warpable = s => editable(s) && !deformed(s);
+
+/* A reference's pts are its placement box, not an outline, so it cannot be
+   point-deformed - it binds to exactly ONE bone and moves rigidly. With a
+   single weight of 1 the blend above and this composition are the same map, so
+   worldPts still gives the right box:
+      D . T(x,y) . R(rot) . S(sx,sy)
+        = T(D(x,y)) . R(rot+dtheta) . S(k.sx, k.sy)
+   because a uniform k commutes with R and with the diagonal S. That is the same
+   argument placeRef already relies on, and it is why a negative sx from a flip
+   survives: nothing here ever decomposes the shape's own matrix. */
+function posedPlacement(s,f){
+  const sk=skinOf(s);
+  if(!sk) return s;
+  const M=skinMats(f==null?frame:f);
+  const D=M.get(sk.bones[0]);
+  if(!D || D.id) return s;
+  const o=applyD(D,{x:s.x,y:s.y});
+  return { x:o.x, y:o.y, rot:s.rot+Math.atan2(D.n,D.c), sx:s.sx*D.k, sy:s.sy*D.k };
 }
 
 /* ------------------------------------------- flip, duplicate, copy, paste */
@@ -2360,7 +4023,7 @@ function flipSelected(axis){
   // A group mirrors about the GROUP's screen box, so the shapes swap sides as
   // well as turning over - flipping each about its own centre leaves the
   // arrangement unmirrored, which does not read as a flip at all.
-  const gb=bbox(grp.flatMap(worldPts));
+  const gb=bbox(grp.flatMap(s=>worldPts(s)));   // arrow: worldPts takes a frame
   for(const s of grp){
     // Pin the on-screen bounding box, not the local centre - on a rotated shape
     // those are different points and only the former leaves the shape looking put.
@@ -2399,6 +4062,12 @@ function pasteClipboard(){
   // a mouth pasted into it would be a reference nobody could have created.
   const cs=all.filter(c=>!(c.ref && !canImport()));
   if(!cs.length) return;
+  /* clipboard is page-level, so a shape copied in one drawing can be pasted
+     into another one whose rig has no such bone. */
+  for(const c of cs) if(c.skin){
+    c.skin.bones=(c.skin.bones||[]).filter(id=>boneById(id)!=null);
+    if(!c.skin.bones.length) delete c.skin;
+  }
   pushUndo();
   const made=cs.map(c=>cloneInto(c,24,24));  // pastes into whichever view is showing
   selected=made[0]; extra=made.slice(1); syncPalette();
@@ -2426,6 +4095,7 @@ bindSlider('optBrushW','optBrushWv', v=>{
 function setTool(t){
   tool=t;
   closeLibrary();
+  exitBoneMode();
   document.querySelectorAll('.tool[data-tool]').forEach(b=>b.classList.toggle('active',b.dataset.tool===t));
   // Selection survives a tool change - that is what lets Smear and Eraser
   // reach a shape sitting underneath another one.
@@ -2467,6 +4137,11 @@ function setViewNames(kind, nFrames){
   }
   view = viewNames[0];
   clearSel();
+  /* SYNCHRONOUSLY, in the same breath as the key swap above and for exactly the
+     same reason: the render loop is always in flight, and one frame landing on a
+     bonePose that is short throws and the canvas is dead until reload. */
+  bonePose=[]; fitBonePose(n); bumpBind();
+  selBone=null;
 }
 
 /* The frame name shown on a chip: a sheet's frames are the expressions a game
@@ -2479,7 +4154,7 @@ function setView(v){
   if(viewNames.indexOf(v)<0) v=viewNames[0];
   // clearSel, not selected=null: "extra" left holding shapes from the view you
   // just left makes a later shift-click build a selection spanning two views.
-  view=v; clearSel(); gRot=0; gRotKey='';
+  view=v; clearSel(); gRot=0; gRotKey=''; selBone=null;
   document.querySelectorAll('#viewSeg button').forEach(b=>b.classList.toggle('on',b.dataset.view===v));
   syncPalette();
 }
@@ -2497,7 +4172,7 @@ function setFrame(i){
   frame=f;
   // clearSel for the same reason setView does it: the shapes of the frame you
   // just left must not stay in "extra" and get lassoed together with new ones.
-  clearSel(); gRot=0; gRotKey='';
+  clearSel(); gRot=0; gRotKey=''; selBone=null;
   syncFrames(); syncPalette();
 }
 const stepFrame = d => {
@@ -2550,22 +4225,33 @@ function addFrame(){
   if(framesLocked()) return;
   pushUndo();
   for(const n of viewNames) views[n].splice(frame+1,0,[]);
+  /* The pose is COPIED, not blanked. bonePose.length === frameCount() is an
+     invariant the render loop depends on, and an empty pose means nothing
+     anyway - a new frame starts from the shape you were just looking at. */
+  bonePose.splice(frame+1,0,clonePose(poseAt(frame))); rigRev++;
   setFrame(frame+1); render();
 }
 function dupFrame(){
   if(framesLocked()) return;
   pushUndo();
   for(const n of viewNames) views[n].splice(frame+1,0,reidClone(views[n][frame]||[]));
+  bonePose.splice(frame+1,0,clonePose(poseAt(frame))); rigRev++;
   setFrame(frame+1); render();
 }
 function delFrame(i){
   if(framesLocked() || frameCount()<2) return;
   pushUndo();
   for(const n of viewNames) views[n].splice(i,1);
+  bonePose.splice(i,1); rigRev++;
   setFrame(Math.min(i, frameCount()-1)); render();
 }
 /* Copy this view's current frame onto its neighbour. Same Replace / Add / Cancel
-   question the view copy asks, and the same clone-with-fresh-ids rule. */
+   question the view copy asks, and the same clone-with-fresh-ids rule.
+
+   Nothing here has to know about bones: the shapes are stored AT REST, so a
+   clone simply takes the destination frame's pose when it is drawn. Baking the
+   pose into the shapes would have needed a re-bake here, and getting it wrong
+   would have shown up as the copied art lurching on the next bone drag. */
 function copyFrameTo(mode,dst){
   pushUndo();
   const clones=reidClone(selected ? selGroup() : cur());
@@ -2577,6 +4263,10 @@ function copyFrameTo(mode,dst){
 const KEY_PREV='Q', KEY_NEXT='E';
 
 function syncFrames(){
+  /* Skeleton mode is for BUILDING a rig, not for animating: every control in
+     the bar - the chips, the onion, the skeleton checkbox - belongs to the
+     drawing editor, so the whole pill goes away with it. */
+  document.getElementById('animbar').classList.toggle('hidden', boneMode);
   const box=document.getElementById('frames');
   /* With one eye or mouth object selected the bar lists ITS frames instead of
      the document's, and every button that edits the document's frames goes
@@ -2621,6 +4311,13 @@ function syncFrames(){
     add.addEventListener('click',()=>{ pauseAnim(); addFrame(); });
     box.appendChild(add);
   }
+  /* The skeleton overlay: nothing to show without a rig, and it is the
+     document's own bones, so a borrowed bar has nothing to do with it. */
+  const skel=document.getElementById('animSkel');
+  skel.disabled = !rig.length;
+  skel.checked  = poseOverlay && !!rig.length;
+  document.getElementById('skelLbl').classList.toggle('locked', !rig.length);
+
   const play=document.getElementById('btnPlay');
   play.firstChild.nodeValue = playing ? 'Pause' : 'Play';
   play.disabled = dn<2 || !!rt;
@@ -2933,7 +4630,7 @@ document.getElementById('btnExport').addEventListener('click',exportPNG);
    while the fill still closes with a straight chord; a colour of "none" means
    do not render that part at all. */
 const SCENE_FORMAT  = 'charactersmith.scene';
-const SCENE_VERSION = 3;
+const SCENE_VERSION = 4;   // v4 added the bones block
 
 function sceneToJSON(){
   const r = cv.getBoundingClientRect();
@@ -2956,6 +4653,13 @@ function sceneToJSON(){
     frameCount: frameCount(),
     views: vs,                                // views[key][frame]; array order IS draw order
     refs: refs,                               // imported drawings, one entry each
+    /* The skeleton. `rig` is the hierarchy, `bind` is the rest pose the skin
+       weights are measured against, and `pose` is one entry per FRAME. Each
+       shape carries its own { skin:{bones,falloff} } inside views above; the
+       weights themselves are derived on load and never written. */
+    bones: { rig:  JSON.parse(JSON.stringify(rig)),
+             bind: JSON.parse(JSON.stringify(bindPose)),
+             pose: JSON.parse(JSON.stringify(bonePose)) },
     render: {
       shading: shading,                       // 'hatch' | 'gradient'
       light: { from:{x:LIGHT_FROM.x,y:LIGHT_FROM.y}, to:{x:LIGHT_TO.x,y:LIGHT_TO.y},
@@ -3008,6 +4712,12 @@ function migrateScene(o){
       if(s && s.ref) migrateRefField(s.ref, rf[s.ref.key]);
     (o.render||(o.render={})).fps=FPS;
     o.version=3;
+  }
+  if(o.version<4){
+    // Nothing to fold: a v3 drawing simply has no skeleton. AFTER the v3 block,
+    // which is what settles frameCount.
+    o.bones={ rig:[], bind:{}, pose:[] };
+    o.version=4;
   }
   return o;
 }
@@ -3074,6 +4784,26 @@ function sceneFromJSON(raw){
   const rf = o.refs || {};
   for(const k of Object.keys(rf)) refLib.set(k, rf[k]);
 
+  /* The skeleton, before anything reads a pose. fitBonePose pads it to the
+     frame count the views above have just decided - a scene that declares fewer
+     pose frames than it has frames must not leave views[view][frame] reachable
+     with poseAt(frame) undefined. */
+  const bn = o.bones || {};
+  rig      = Array.isArray(bn.rig) ? bn.rig : [];
+  bindPose = bn.bind || {};
+  bonePose = Array.isArray(bn.pose) ? bn.pose : [];
+  fitBonePose(frameCount());
+  // bone ids are their own namespace, and need the same sweep the shape uid gets
+  let mb=0; for(const b of rig) if(b.id>mb) mb=b.id;
+  bid = mb+1;
+  // a skin pointing at a bone this scene does not carry reads as unbound
+  const live=new Set(rig.map(b=>b.id));
+  for(const s of allShapes()) if(s.skin){
+    s.skin.bones=(s.skin.bones||[]).filter(id=>live.has(id));
+    if(!s.skin.bones.length) delete s.skin;
+  }
+  bumpBind();
+
   /* ids are only unique WITHIN a scene, so the counter has to be pushed past
      every one of them - otherwise the next brush stroke gets an id a loaded
      shape already holds, and everything that resolves a shape by id (undo,
@@ -3096,6 +4826,8 @@ function sceneFromJSON(raw){
   pauseAnim();
   clearSel();
   paletteMode='paint';
+  boneMode=false; boneTool='bdraw'; selBone=null; boneGesture=null;
+  skinHideBound=false; splitCache={key:'',dx:0};
   setShading(rn.shading==='gradient'?'gradient':'hatch');
   frame=Math.max(0,Math.min(frameCount()-1, ed.activeFrame||0));
   setView(viewNames.indexOf(ed.activeView)>=0 ? ed.activeView : viewNames[0]);
@@ -3107,6 +4839,9 @@ function sceneFromJSON(raw){
 
 function newScene(kind){
   pauseAnim();
+  // Before setViewNames, so its pose rebuild starts from an empty skeleton.
+  rig=[]; bindPose={}; bonePose=[]; bid=1; selBone=null; boneMode=false; boneTool='bdraw';
+  skinHideBound=false; splitCache={key:'',dx:0};
   setViewNames(kind||'character');            // empties and re-keys views, rebuilds the switch
   refLib.clear();
   uid=1; clearSel(); paletteMode='paint';
@@ -3649,6 +5384,7 @@ function buildRefEntry(data){
   let x0=1e9,y0=1e9,x1=-1e9,y1=-1e9,any=false;
   for(const fr of frames) for(const s of fr){
     delete s.id;                              // those ids belong to the other scene
+    delete s.skin;                            // ...and so did those bone ids
     if(!s.pts || s.pts.length<2) continue;
     const bb=bbox(worldPts(s)), pad=(s.lw||0)/2+1;
     if(bb.x0-pad<x0) x0=bb.x0-pad;  if(bb.y0-pad<y0) y0=bb.y0-pad;
@@ -3761,6 +5497,39 @@ async function updateRef(oldKey){
     if(s.ref && s.ref.key===oldKey) placeRef(s, built);
   syncPalette(); render();
 }
+/* The dismiss-anywhere listener below is on pointerdown, which lands BEFORE
+   the click that toggles - so without this the button could open the menu but
+   never close it again. */
+document.getElementById('modeWrap').addEventListener('pointerdown',e=>e.stopPropagation());
+document.getElementById('btnMode').addEventListener('click',e=>{
+  e.stopPropagation();
+  if(!canRig()) return;
+  modeMenuOpen=!modeMenuOpen;
+  syncPalette();
+});
+document.getElementById('modeMenu').addEventListener('click',e=>{
+  e.stopPropagation();
+  const b=e.target.closest('.mopt');
+  if(b) setMode(b.dataset.mode);
+});
+// anywhere else dismisses it, the canvas included
+window.addEventListener('pointerdown',()=>{
+  if(!modeMenuOpen) return;
+  modeMenuOpen=false; syncPalette();
+});
+document.querySelectorAll('.btool').forEach(b=>
+  b.addEventListener('click',()=>setBoneTool(b.dataset.btool)));
+
+/* Posing without bone mode. The rig draws over the ordinary editor and a press
+   that lands on a bone poses it; anything else falls through to whatever tool
+   is up, so you can draw and pose in the same breath. */
+document.getElementById('animSkel').addEventListener('change',e=>{
+  poseOverlay=e.target.checked;
+  if(poseOverlay) pauseAnim();
+  else { selBone=null; boneGesture=null; }
+  syncFrames(); render();
+});
+
 document.getElementById('btnLibrary').addEventListener('click',()=>{
   if(!canImport()) return;
   paletteMode = paletteMode==='library' ? 'paint' : 'library';
@@ -3883,8 +5652,12 @@ document.getElementById('btnGallery').addEventListener('click',()=>{
    no draft anywhere, only the row. So anything that walks away from the
    drawing asks first, and the answer is one of save it, throw it away, or stay.
    An empty drawing has nothing to lose, so it never asks. */
+/* "Is there anything here worth saving?" - which a SKELETON is. Building a rig
+   before drawing anything is a normal way round, and without the rig.length arm
+   the unsaved-work guard reads the drawing as empty and lets you walk away from
+   it. The key syncChrome memoises on already re-reads this every frame. */
 function hasArt(){
-  return viewNames.some(n=>(views[n]||[]).some(f=>f && f.length));
+  return rig.length>0 || viewNames.some(n=>(views[n]||[]).some(f=>f && f.length));
 }
 function unsaved(){ return dirty && hasArt(); }
 function guardUnsaved(go){
@@ -4205,6 +5978,8 @@ function objectSceneFrom(shapes, kind){
      PARENT's - buildRefEntry recentres on the union bbox anyway, and keeping
      them is what makes the reference land on top of what it replaced. */
   v[names[0]][0]=JSON.parse(JSON.stringify(shapes));
+  // The child owns no bones, so it must not claim to be skinned to the parent's.
+  for(const s of v[names[0]][0]) delete s.skin;
 
   const refs={};
   for(const k of usedRefKeys(v)) if(refLib.has(k)) refs[k]=refLib.get(k);
@@ -4216,6 +5991,7 @@ function objectSceneFrom(shapes, kind){
   o.frameCount=nF;
   o.views=v;
   o.refs=refs;
+  o.bones={ rig:[], bind:{}, pose:[] };     // an object starts unrigged
   o.editor.activeView=names[0];
   o.editor.activeFrame=0;
   return o;
@@ -4258,7 +6034,7 @@ async function makeObject(kind){
     /* Nothing above this line touched the document, so a failure anywhere in it
        leaves the drawing exactly as it was. */
     pushUndo();
-    const gb=bbox(grp.flatMap(worldPts));
+    const gb=bbox(grp.flatMap(s=>worldPts(s)));   // arrow: worldPts takes a frame
     const list=cur(), keep=new Set(grp);
     for(let i=list.length-1;i>=0;i--) if(keep.has(list[i])) list.splice(i,1);
 
@@ -4442,12 +6218,12 @@ window.addEventListener('keydown',e=>{
     if(e.target.tagName==='INPUT' && (k==='c'||k==='v'||k==='x'||k==='a')) return;
     if(k==='z'){ e.preventDefault(); e.shiftKey?redo():undo(); }
     else if(k==='y'){ e.preventDefault(); redo(); }
-    else if(k==='c'){ e.preventDefault(); copySelected(); }
-    else if(k==='v'){ e.preventDefault(); pasteClipboard(); }
-    else if(k==='d'){ e.preventDefault(); duplicateSelected(); }
+    else if(k==='c'){ e.preventDefault(); if(!boneMode) copySelected(); }
+    else if(k==='v'){ e.preventDefault(); if(!boneMode) pasteClipboard(); }
+    else if(k==='d'){ e.preventDefault(); if(boneMode) duplicateBone(selBone); else duplicateSelected(); }
     return;
   }
-  if(e.target.tagName==='INPUT') return;    // let the sliders and the search box keep their keys
+  if(e.target.tagName==='INPUT'||e.target.tagName==='SELECT') return;  // sliders, the search box, the bone picker
   /* Q and E walk the animation, Tab turns the drawing round, space plays it.
      Q used to be the front/back switch; it is the frames that you step through
      constantly now, so they get the pair of keys under your left hand. */
@@ -4455,14 +6231,23 @@ window.addEventListener('keydown',e=>{
   else if(k==='e'){ pauseAnim(); stepFrame( 1); render(); }
   else if(e.key==='Tab'){ e.preventDefault(); toggleView(); render(); }
   else if(e.key===' '){ e.preventDefault(); togglePlay(); }
+  /* In Skeleton mode 1-4 pick the BONE tools rather than the drawing ones -
+     the drawing tools are what it replaces, so none of them may be reachable
+     while it is up. The Hand keeps the SAME key it has in Draw mode; 3 is the
+     Eraser, which has no bone equivalent, so it simply does nothing here. */
+  else if(boneMode && (e.key==='1'||e.key==='2'||e.key==='3'||e.key==='4')){
+    const bt={'1':'bdraw','2':'bskin','4':'bhand'}[e.key];
+    if(bt) setBoneTool(bt);
+  }
   else if(e.key==='1') setTool('brush');
   else if(e.key==='2') setTool('smear');
   else if(e.key==='3') setTool('eraser');
   else if(e.key==='4') setTool('hand');
+  else if(e.key==='5'){ if(boneMode){ exitBoneMode(); syncPalette(); render(); } else enterBoneMode(); }
   else if(k==='h') setShading(shading==='hatch'?'gradient':'hatch');
-  else if(e.key==='Delete'||e.key==='Backspace') deleteSelected();
-  else if(e.key==='ArrowUp'){   e.preventDefault(); reorderSel( 1); }   // up/down are depth,
-  else if(e.key==='ArrowDown'){ e.preventDefault(); reorderSel(-1); }
+  else if(e.key==='Delete'||e.key==='Backspace'){ if(boneMode) deleteBone(selBone); else deleteSelected(); }
+  else if(e.key==='ArrowUp'){   e.preventDefault(); if(!boneMode) reorderSel( 1); }   // up/down are depth,
+  else if(e.key==='ArrowDown'){ e.preventDefault(); if(!boneMode) reorderSel(-1); }
   else if(e.key==='ArrowLeft'){ e.preventDefault(); pauseAnim(); stepFrame(-1); render(); }
   else if(e.key==='ArrowRight'){e.preventDefault(); pauseAnim(); stepFrame( 1); render(); }
 });
@@ -4472,6 +6257,7 @@ resize();
 setViewNames('character');    // builds the view switch; the markup only seeds it
 setView(viewNames[0]);
 syncFrames();
+buildModeMenu();
 setTool('brush');
 syncHistory();
 syncPalette();
