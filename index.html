@@ -668,6 +668,13 @@
    </div>
 
    <div class="psec btoolopt" id="optBEdit">
+     <!-- The rest skeleton is per VIEW, so a back view can have the arms on the
+          other side. These two are how you get one: copy the fitted front rig
+          across, mirrored, and then nudge it. -->
+     <div class="prow" id="rigCopyRow">
+       <button class="pbtn" id="btnRigCopyM">Copy mirrored</button>
+       <button class="pbtn" id="btnRigCopy">Copy as is</button>
+     </div>
      <div id="editNote"></div>
    </div>
 
@@ -854,17 +861,36 @@ let current = { outline:'#2E2A28', fill:'#F7C59F', shadow:'#B9713F' };
    as they share one frame index. The POSE is per frame.
 
    rig      structure only, ordered so a parent always precedes its children
-   bindPose the REST skeleton - what the weights were measured against
-   bonePose one entry per frame; bonePose.length === frameCount() ALWAYS
+   restPose the REST skeleton - ONE PER VIEW - and what the weights are
+            measured against
+   bonePose one DELTA FROM THE REST per frame; bonePose.length === frameCount()
 
    A bone's origin is not stored: it is a point in its PARENT's frame - `att`
    along the parent (a fraction, so it tracks the parent's length) and `off`
    perpendicular to it (world units). A shoulder wants att 0.85; an ear wants an
-   off. Only a ROOT carries a world x,y, and it carries it in the pose rather
-   than in the structure, so the whole figure can be moved per frame. */
-let rig      = [];    // { id, name, side:''|'L'|'R', parent, att, off, pinned, ikt }
-let bindPose = {};    // boneId -> { len, rot }  (+ x,y on a root).  rot is LOCAL.
-let bonePose = [];    // bonePose[frame][boneId] -> the same shape
+   off. Only a ROOT carries a world x,y. Both live in the REST, per view.
+
+   WHY THE REST IS PER VIEW. Seen from behind, a figure's left arm is on the
+   other side of the screen, so a rig fitted to the front does not fit the back
+   - which is what Edit Bones and Flip are for, and both of them used to write
+   document-wide state, so fixing the back view broke the front one.
+
+   WHY THE POSE IS A DELTA. It used to be the bone's local angle outright, which
+   never referenced the rest at all - so with a per-view rest the first posed
+   frame would put both views back on the front's skeleton. Storing the offset
+   instead lets ONE animation drive every view off its own rest: zero delta is
+   each view sitting where it was fitted. It is also what makes "editing the
+   rest deforms nothing" structural rather than something setBoneRest maintains
+   by writing the rest into every frame.
+
+   AND THE MIRROR SENSE. mx/my are each +1 or -1 and say whether this view's
+   rest is a reflection. The rotation sense is mx*my and dx/dy negate with mx/my
+   - because the true mirror of a posed W+D is 2a-W-D, which is the flipped rest
+   with -D applied. Without it a flipped back view would swing the SAME screen
+   way as the front instead of the mirrored way. */
+let rig      = [];    // { id, name, side:''|'L'|'R', parent, pinned, ikt }
+let restPose = {};    // restPose[view][boneId] -> { len, rot, att, off, mx, my } (+x,y on a root)
+let bonePose = [];    // bonePose[frame][boneId] -> { drot, klen, dx?, dy?, ik:{view:{x,y}} }
 let bid      = 1;     // bone ids are a SEPARATE namespace from the shape uid
 let selBone  = null;
 let boneMode = false;
@@ -889,6 +915,16 @@ let skinHideBound = false;
 // without the gesture arm the preview line has nothing to draw itself on.
 const rigVisible = () => (boneMode && (rig.length>0 || !!boneGesture)) ||
                          (poseOverlay && rig.length>0);
+/* Add Bones and Edit Bones write the REST, so they SHOW the rest - the rig and
+   the artwork both. They used to draw the posed frame and resolve against the
+   bind, which only agreed while the frame happened to be unposed; and with the
+   pose a delta, editing the rest of a posed frame in posed space would deform
+   the shapes it is the whole point of these two tools not to touch. Pose and
+   Skinning are still what they were. */
+const rigAtRest = () => boneMode && (boneTool==='bdraw' || boneTool==='bedit');
+const rigPose   = () => rigAtRest() ? {} : poseAt(frame);
+const REST_F    = -1;                       // the "frame" that means: no deformation
+const rigFrame  = () => rigAtRest() ? REST_F : frame;
 /* Bumped by every rig, bind or pose edit. It is the cache key for skinMats and
    for the per-shape weights - see the skinning section. */
 let rigRev   = 0;
@@ -903,16 +939,59 @@ const canRig = () => docKind==='character' || docKind==='item';
 const poseAt   = f => bonePose[f] || {};
 const boneById = id => { for(const b of rig) if(b.id===id) return b; return null; };
 const boneKids = id => rig.filter(b=>b.parent===id);
-function clonePose(p){ const o={}; for(const k of Object.keys(p||{})) o[k]={...p[k]}; return o; }
+function clonePose(p){ const o={}; for(const k of Object.keys(p||{})) o[k]=cloneDelta(p[k]); return o; }
+function cloneDelta(d){ const o={...d}; if(d && d.ik){ o.ik={}; for(const k of Object.keys(d.ik)) o.ik[k]={...d.ik[k]}; } return o; }
 /* Every frame carries a pose for every bone, for the same reason every view
-   carries the same number of frames. Called from setViewNames and the frame ops. */
+   carries the same number of frames. Called from setViewNames and the frame ops.
+   A missing entry is simply a ZERO delta now, so the backfill is a formality -
+   everything that reads one copes with it being absent. */
 function fitBonePose(n){
   const want=Math.max(1, n|0);
   while(bonePose.length>want) bonePose.pop();
-  while(bonePose.length<want) bonePose.push(clonePose(bonePose[bonePose.length-1]||bindPose));
-  for(const p of bonePose) for(const b of rig) if(!p[b.id]) p[b.id]={...(bindPose[b.id]||{len:1,rot:0})};
+  while(bonePose.length<want) bonePose.push(clonePose(bonePose[bonePose.length-1]||{}));
+  for(const p of bonePose) for(const b of rig) if(!p[b.id]) p[b.id]={drot:0,klen:1};
   rigRev++;
 }
+
+/* --------------------------------------------------- the rest, per view
+   restAt is to restPose what cur() is to views and poseAt is to bonePose: the
+   render loop is always in flight and must never read undefined out of it. */
+const REST0 = {len:0, rot:0, att:1, off:0, mx:1, my:1};
+const restAt   = v => restPose[v||view] || (restPose[v||view] = {});
+const restBone = (id,v) => restAt(v)[id] || REST0;
+// the rotation sense: a reflected rest swings the other way for the same delta
+const mirOf = r => (r.mx==null?1:r.mx)*(r.my==null?1:r.my);
+const sgnX  = r => (r.mx<0 ? -1 : 1);
+const sgnY  = r => (r.my<0 ? -1 : 1);
+
+/* Reading and writing a pose entry. Everything outside boneWorld thinks in
+   ABSOLUTE local angles and world lengths, exactly as it did before deltas -
+   these four are the whole of the conversion. */
+const poseEntry  = (p,id) => p[id] || (p[id] = {drot:0, klen:1});
+const localRotOf = (p,id,v) => { const r=restBone(id,v), d=p[id];
+                                 return (r.rot||0) + mirOf(r)*((d&&d.drot)||0); };
+const boneLenOf  = (p,id,v) => { const r=restBone(id,v), d=p[id];
+                                 return (r.len||0) * ((d&&d.klen!=null)?d.klen:1); };
+function setLocalRot(p,id,rot,v){ const r=restBone(id,v);
+  poseEntry(p,id).drot = (rot-(r.rot||0))/mirOf(r); }
+function setBoneLenP(p,id,len,v){ const r=restBone(id,v);
+  poseEntry(p,id).klen = (r.len>0.0001) ? len/r.len : 1; }
+function setRootPos(p,id,x,y,v){ const r=restBone(id,v), e=poseEntry(p,id);
+  e.dx = sgnX(r)*(x-(r.x||0)); e.dy = sgnY(r)*(y-(r.y||0)); }
+const rootPosOf = (p,id,v) => { const r=restBone(id,v), d=p[id]||{};
+  return { x:(r.x||0)+sgnX(r)*(d.dx||0), y:(r.y||0)+sgnY(r)*(d.dy||0) }; };
+// zero delta, but a goal is not part of the transform and survives
+function zeroDelta(p,id){ const e=p[id]; const ik=e&&e.ik; p[id]={drot:0,klen:1};
+                          if(ik) p[id].ik=ik; }
+const atRestDelta = d => !d || (Math.abs(d.drot||0)<1e-9 && Math.abs((d.klen==null?1:d.klen)-1)<1e-9 &&
+                                Math.abs(d.dx||0)<1e-6 && Math.abs(d.dy||0)<1e-6);
+
+/* An IK goal is a WORLD point, so it belongs to one VIEW as well as to one
+   frame - the two views' skeletons no longer stand in the same place. */
+const goalOf = (p,id,v) => { const e=p[id];
+  return (e && e.ik && e.ik[v||view]) ? e.ik[v||view] : null; };
+function setGoal(p,id,x,y,v){ const e=poseEntry(p,id);
+  (e.ik||(e.ik={}))[v||view]={x:x, y:y}; }
 
 /* An imported eye or mouth sheet is an ordinary shape carrying a "ref" field.
    It can be moved, scaled and rotated, but its points, its colours and the
@@ -1256,12 +1335,14 @@ function drawRefShape(s,opts){
   if(depth>=REF_MAX_DEPTH) return;
   const lib = refLib.get(s.ref.key);
   if(!lib) return;
-  const fi = refFrameIndex(s.ref, lib, o.pframe);
+  // REST_F is not a frame of anything - "follow" still means the frame you are on
+  const ff = (o.pframe==null || o.pframe<0) ? frame : o.pframe;
+  const fi = refFrameIndex(s.ref, lib, ff);
   const fr = refFrames(lib)[fi];
   if(!fr || !fr.length) return;
   ctx.save();
   // A reference binds to one bone and moves rigidly - see posedPlacement.
-  const pl = posedPlacement(s, o.pframe);
+  const pl = posedPlacement(s, o.pframe, o.pview);
   ctx.translate(pl.x,pl.y); ctx.rotate(pl.rot); ctx.scale(pl.sx,pl.sy);
   // opts is forwarded near-verbatim: drawShape ASSIGNS globalAlpha rather than
   // multiplying it, so an alpha set out here would be thrown away and the
@@ -1278,8 +1359,9 @@ function drawShape(s,opts){
   const ghost = opts && opts.ghost;
   /* The frame is passed through so the onion of frame n-1 is deformed by frame
      n-1's pose, and the other view by the current one. Without it both would
-     be posed by whichever frame happens to be showing. */
-  const wp = worldPts(s, opts && opts.pframe);
+     be posed by whichever frame happens to be showing - and the VIEW with it,
+     since each view now has a rest skeleton of its own to be posed against. */
+  const wp = worldPts(s, opts && opts.pframe, opts && opts.pview);
   if(wp.length<3) return;
   const b = bbox(wp);
   const closed = s.closed!==false;
@@ -1501,7 +1583,7 @@ function splitDX(){
   if(splitCache.key===key) return splitCache.dx;
   let x0=1e9,x1=-1e9;
   for(const s of list){ const b=bbox(worldPts(s)); x0=Math.min(x0,b.x0); x1=Math.max(x1,b.x1); }
-  const W=boneWorld(poseAt(frame));
+  const W=boneWorld(rigPose(), view);
   for(const b of rig){
     const w=W.get(b.id); if(!w) continue;
     const t=boneTip(w);
@@ -1535,19 +1617,23 @@ function drawFrame(){
      back view against the front - the first view, unless you are standing on
      it, then the second. The FRAME onion is how you draw the next step of an
      animation against the last one. Frame 0 has nothing behind it. */
+  /* The other view has a REST SKELETON OF ITS OWN now, so its ghost has to be
+     deformed against that one rather than against the view you are standing in
+     - pview is what says so. */
+  const RF = rigFrame();
   if(onionOn && viewNames.length>1){
     const ok = view===viewNames[0] ? viewNames[1] : viewNames[0];
-    for(const s of (views[ok]||[])[frame]||[]) drawShape(s,{ghost:true});
+    for(const s of (views[ok]||[])[frame]||[]) drawShape(s,{ghost:true, pview:ok, pframe:RF});
   }
   if(onionFrame && frame>0)
-    for(const s of (views[view]||[])[frame-1]||[]) drawShape(s,{ghost:true});
+    for(const s of (views[view]||[])[frame-1]||[]) drawShape(s,{ghost:true, pframe:RF});
   /* While you are rigging, the artwork is context rather than the subject - it
      goes grey exactly as an onion does. The Skinning tool is the exception: you
      are picking shapes with it, so they have to be legible. */
   const rigging = boneMode && boneTool!=='bskin';
   for(const s of cur()){
     if(skinHidden(s)) continue;
-    drawShape(s, rigging ? {pframe:frame, ghost:true} : {pframe:frame});
+    drawShape(s, rigging ? {pframe:RF, ghost:true} : {pframe:RF});
   }
   if(SD) ctx.restore();
 
@@ -1645,21 +1731,30 @@ function drawFrame(){
    (att, 1 being the parent's tip) and its world angle is the parent's plus its
    own local one. Only a root carries a world x,y, and it carries it in the POSE
    rather than in the structure, so the figure can be moved per frame. */
-function boneWorld(pose){
-  const M=new Map();
+/* `pose` is a map of DELTAS and `v` names the view whose REST they are deltas
+   from. boneWorld({}, v) is therefore that view's rest skeleton, which is what
+   Add Bones, Edit Bones and the skin weights all resolve against. */
+function boneWorld(pose,v){
+  const R=restAt(v), M=new Map();
   for(const b of rig){
-    const p=pose[b.id] || bindPose[b.id] || {len:0,rot:0};
+    const r=R[b.id] || REST0, d=pose[b.id] || null;
+    const lrot=(r.rot||0) + mirOf(r)*((d&&d.drot)||0);
+    const len =(r.len||0) * ((d&&d.klen!=null)?d.klen:1);
     let x,y,rot;
     const pw = b.parent!=null ? M.get(b.parent) : null;
-    if(!pw){ x=p.x||0; y=p.y||0; rot=p.rot||0; }   // root, or an orphan treated as one
+    if(!pw){                                       // root, or an orphan treated as one
+      x=(r.x||0) + sgnX(r)*((d&&d.dx)||0);
+      y=(r.y||0) + sgnY(r)*((d&&d.dy)||0);
+      rot=lrot;
+    }
     else{
       // along the parent, then perpendicular to it, both in the parent's frame
-      const t=(b.att==null?1:b.att)*pw.len, o=b.off||0;
+      const t=(r.att==null?1:r.att)*pw.len, o=r.off||0;
       const c=Math.cos(pw.rot), n=Math.sin(pw.rot);
       x=pw.x + c*t - n*o;  y=pw.y + n*t + c*o;
-      rot=pw.rot+(p.rot||0);
+      rot=pw.rot+lrot;
     }
-    M.set(b.id,{x:x,y:y,rot:rot,len:p.len||0});
+    M.set(b.id,{x:x,y:y,rot:rot,len:len});
   }
   return M;
 }
@@ -1705,7 +1800,7 @@ function boneHit(world,p,knobsOnly){
    so it stays legible over any colour. */
 function drawBones(){
   if(!rigVisible()) return;
-  const W=boneWorld(poseAt(frame));
+  const W=boneWorld(rigPose(), view);
   ctx.save();
   // the split view's other half: the artwork went left, the rig goes right
   const SD=splitDX(); if(SD) ctx.translate(SD,0);
@@ -1833,25 +1928,25 @@ const IKT_R = 10;
 // Where a target sits before it has been placed. Only ever a SEED.
 const ikTargetPos = w => boneTip(w);
 
-/* A goal is a WORLD point, and it is per FRAME: it lives on the pose entry as
-   ikx/iky, so clonePose, snapshot(), the scene's bones.pose, frame duplication
-   and undo all carry it with nothing extra written.
+/* A goal is a WORLD point, and it is per FRAME and now per VIEW as well: it
+   lives on the pose entry under ik[viewKey], so clonePose, snapshot(), the
+   scene's bones.pose, frame duplication and undo all carry it with nothing
+   extra written. Per view because the two views' skeletons no longer stand in
+   the same place - one world point cannot serve both.
 
    World rather than bone-relative is the whole point of it. Moving the root -
    or any bone above the target's own - must NOT carry the target along; the
    chain solves back to the goal instead, which is what plants a foot while the
    body moves over it. */
-const ikGoalOf = (b,pose,W) => { const v=pose[b.id];
-  return (v && v.ikx!=null) ? {x:v.ikx, y:v.iky} : ikTargetPos(W.get(b.id)); };
+const ikGoalOf = (b,pose,W) => goalOf(pose,b.id,view) || ikTargetPos(W.get(b.id));
 function seedIKGoal(b,f){
-  const p=poseAt(f), w=boneWorld(p).get(b.id);
-  if(!w || !p[b.id]) return;
-  const t=ikTargetPos(w); p[b.id].ikx=t.x; p[b.id].iky=t.y;
+  const p=poseAt(f), w=boneWorld(p,view).get(b.id);
+  if(!w) return;
+  const t=ikTargetPos(w); setGoal(p,b.id,t.x,t.y,view);
 }
 function seedIKGoalAll(b){ for(let f=0;f<bonePose.length;f++) seedIKGoal(b,f); }
-function clearIKGoal(b){
-  for(const p of bonePose) if(p[b.id]){ delete p[b.id].ikx; delete p[b.id].iky; }
-}
+// the target is off, so every view's goal for it goes
+function clearIKGoal(b){ for(const p of bonePose) if(p[b.id]) delete p[b.id].ik; }
 /* Put every targeted chain back on its goal. Called after ANY pose edit, since
    all of them move a limb off its target - and NEVER from the render loop: the
    pose is the document and the painter does not write to it.
@@ -1871,9 +1966,9 @@ function enforceIKTargets(stopId){
   // free; past four nothing moves.
   for(let pass=0; pass<4; pass++)
     for(const b of rig){
-      const v=p[b.id];
-      if(!b.ikt || !v || v.ikx==null) continue;
-      solveIK(b, {x:v.ikx, y:v.iky}, stopId);
+      const g=b.ikt ? goalOf(p,b.id,view) : null;
+      if(!g) continue;
+      solveIK(b, {x:g.x, y:g.y}, stopId);
     }
 }
 /* Which bones a target is already posing: the targeted bone itself and every
@@ -1890,8 +1985,7 @@ function ikGoverned(id){
   if(!rig.some(b=>b.ikt)) return false;
   const p=poseAt(frame);
   for(const b of rig){
-    const v=p[b.id];
-    if(!b.ikt || !v || v.ikx==null) continue;
+    if(!b.ikt || !goalOf(p,b.id,view)) continue;
     if(ikChain(b).some(c=>c.id===id)) return true;
   }
   return false;
@@ -1905,7 +1999,7 @@ function ikGoverned(id){
    sitting under a bone still has to be grabbable - that is the whole reason it
    is tested before the bones are. */
 function ikTargetHit(world,p){
-  const pose=poseAt(frame);
+  const pose=rigPose();
   let best=null, bd=IKT_R+8;
   for(const b of rig){
     if(!b.ikt || !world.get(b.id)) continue;
@@ -1915,9 +2009,12 @@ function ikTargetHit(world,p){
   return best;
 }
 function drawIKTargets(){
-  // part of the skeleton, so it is shown exactly when the skeleton is
-  if(!rigVisible() || !rig.some(b=>b.ikt)) return;
-  const pose=poseAt(frame), W=boneWorld(pose);
+  /* Part of the skeleton, so it is shown exactly when the skeleton is - except
+     in the two tools that show the REST, where a goal is not a thing that
+     exists: it is pose data, and drawing it at a rest tip would be a crosshair
+     claiming to be somewhere it is not. */
+  if(!rigVisible() || rigAtRest() || !rig.some(b=>b.ikt)) return;
+  const pose=rigPose(), W=boneWorld(pose,view);
   ctx.save();
   const SD=splitDX(); if(SD) ctx.translate(SD,0);
   ctx.lineCap='round'; ctx.lineJoin='round';
@@ -1975,7 +2072,7 @@ function snapshot(){
      every bone edit an ordinary undoable one with nothing extra written -
      a snapshot that forgets one of them looks fine until you redo. */
   return JSON.stringify({views:v, view:view, frame:frame, sel:selGroup().map(g=>g.id),
-                         rig:rig, bind:bindPose, pose:bonePose, selBone:selBone});
+                         rig:rig, rest:restPose, pose:bonePose, selBone:selBone});
 }
 function restore(str){
   const snap=JSON.parse(str);
@@ -1983,7 +2080,8 @@ function restore(str){
   frame=Math.max(0,Math.min(frameCount()-1, snap.frame||0));
   /* Before setView, which clears selBone - and the pose is clamped to the frame
      count the views above have just decided, so it can never come back short. */
-  rig=snap.rig||[]; bindPose=snap.bind||{}; bonePose=snap.pose||[];
+  rig=snap.rig||[]; restPose=snap.rest||{}; bonePose=snap.pose||[];
+  for(const n of viewNames) if(!restPose[n]) restPose[n]={};
   fitBonePose(frameCount()); bumpBind();
   const wantBone=snap.selBone;
   setView(snap.view);
@@ -3123,7 +3221,7 @@ function syncPalette(){
 /* ------------------------------------------------------- the bone sidebar */
 const BTOOL_HINTS={
   bdraw:'',
-  bedit:'Drag the joints to re-align the skeleton. It edits the REST pose, so nothing you drag here deforms a shape.',
+  bedit:'Drag the joints to re-align the skeleton. It edits the REST pose OF THIS VIEW, so nothing you drag here deforms a shape and the other view keeps its own fit.',
   bhand:'Drag a bone to swing it; the corner handles scale it. A bone an IK target already poses does not take a drag - move its target instead.',
   bskin:'Click a shape to select it, then a bone to attach it to. The bones only take a click on their end circles here, so shapes underneath stay reachable.'
 };
@@ -3137,6 +3235,17 @@ function syncBonePanel(){
   document.getElementById('boneHint')    .classList.toggle('hidden',!boneMode);
   document.querySelectorAll('.btoolopt').forEach(el=>el.classList.add('hidden'));
   document.getElementById(boneMode ? BTOOL_PANELS[boneTool] : 'optBHand').classList.remove('hidden');
+  /* The rest is per view, so copying one across only means anything where there
+     is another view to copy it to. */
+  {
+    const dst=otherView();
+    document.getElementById('rigCopyRow').classList.toggle('hidden', !dst || !rig.length);
+    if(dst){
+      const lbl=(DOC_KINDS[docKind].views.find(r=>r[0]===dst)||[dst,dst])[1];
+      document.getElementById('btnRigCopyM').textContent='Copy mirrored to '+lbl;
+      document.getElementById('btnRigCopy') .textContent='Copy as is to '+lbl;
+    }
+  }
 
   const b = selBone!=null ? boneById(selBone) : null;
   document.getElementById('boneSec')  .classList.toggle('hidden',!b);
@@ -3150,15 +3259,16 @@ function syncBonePanel(){
     document.getElementById('bonePin').checked= !!b.pinned;
     document.getElementById('boneIkt').checked= !!b.ikt;
     document.getElementById('boneRest').disabled = boneAtRest(b,frame);
-    const p=poseAt(frame)[b.id]||{len:0,rot:0};
+    const r=restBone(b.id);                 // att/off/mirror are the CURRENT VIEW's
     const kids=boneKids(b.id).length;
     document.getElementById('boneFacts').innerHTML=
       'parent: '+(b.parent!=null ? esc((boneById(b.parent)||{}).name||'?') : 'none (root)')+'<br>'+
-      'children: '+kids+' &middot; length: '+Math.round(p.len||0)+'px<br>'+
+      'children: '+kids+' &middot; length: '+Math.round(boneLenOf(poseAt(frame), b.id))+'px<br>'+
       'attaches at: '+(b.parent!=null
-        ? Math.round((b.att||0)*100)+'% along the parent'+
-          (Math.abs(b.off||0)>0.5 ? ', '+Math.round(Math.abs(b.off))+'px off it' : '')
+        ? Math.round((r.att||0)*100)+'% along the parent'+
+          (Math.abs(r.off||0)>0.5 ? ', '+Math.round(Math.abs(r.off))+'px off it' : '')
         : 'the canvas')+
+      (mirOf(r)<0 ? '<br>mirrored in this view' : '')+
       /* ...and say so when the bone cannot be dragged, or its refusing to move
          reads as a broken editor rather than as a bone posed by something else. */
       (ikGoverned(b.id) ? '<br>posed by an IK target - drag that instead' : '');
@@ -3167,16 +3277,24 @@ function syncBonePanel(){
 }
 
 /* ==================================================== editing the skeleton
-   Draw Bones edits the REST skeleton: it writes bindPose AND the same values
-   into every frame's pose, so building and fixing a skeleton never deforms
-   anything. The Hand writes only the current frame's pose - that is the half
-   that deforms. Keeping the two apart is what makes either predictable. */
+   Add Bones and Edit Bones edit the REST skeleton, OF THE CURRENT VIEW ALONE -
+   which is the whole point of a per-view rest: re-fitting a back view no longer
+   touches the front one. They no longer write into the frames at all, because
+   the pose is a delta from this very rest: it is zero at rest whatever the rest
+   says, so moving the rest cannot deform a shape. The Pose tool writes only the
+   current frame's delta - that is the half that deforms.
+
+   The write MERGES, so a caller that only means to change len and rot leaves
+   att/off/mx/my exactly as they were. */
 function setBoneRest(id,v){
-  bindPose[id]={...v};
-  // the goal is pose data and survives a rest edit; Draw Bones does not re-solve
-  for(const p of bonePose){ const g=p[id];
-    p[id]={...v};
-    if(g && g.ikx!=null){ p[id].ikx=g.ikx; p[id].iky=g.iky; } }
+  const R=restAt(view);
+  R[id]={...(R[id]||REST0), ...v};
+  bumpBind();
+}
+// ...and the structure ops, which have to reach every view: a bone must exist
+// in all of them, because the hierarchy is one per document.
+function setBoneRestAll(id,v){
+  for(const n of viewNames){ const R=restAt(n); R[id]={...(R[id]||REST0), ...v}; }
   bumpBind();
 }
 // Structure or bind moved: the weights are stale as well as the matrices.
@@ -3213,18 +3331,19 @@ function pruneSkin(deadIds){
 function addBone(parentId, start, end){
   const ang=Math.atan2(end.y-start.y, end.x-start.x), len=dist(start,end);
   const b={ id:bid++, name:'Bone '+(rig.length+1), side:'', parent:parentId,
-            att:1, off:0, pinned:false };
-  const v={ len:len, rot:ang };
+            pinned:false };
+  const v={ len:len, rot:ang, att:1, off:0, mx:1, my:1 };
   if(parentId==null){ v.x=start.x; v.y=start.y; }
   else{
     // computed BEFORE the push, so boneWorld's single pass does not meet a bone
-    // that has no pose entry yet
-    const pw=boneWorld(bindPose).get(parentId);
+    // that has no rest entry yet. Against the CURRENT VIEW's rest, which is what
+    // Add Bones draws.
+    const pw=boneWorld({},view).get(parentId);
     if(pw){
       const dx=start.x-pw.x, dy=start.y-pw.y;
       const c=Math.cos(-pw.rot), n=Math.sin(-pw.rot);
-      b.att = pw.len>0.0001 ? (dx*c - dy*n)/pw.len : 1;
-      b.off = dx*n + dy*c;
+      v.att = pw.len>0.0001 ? (dx*c - dy*n)/pw.len : 1;
+      v.off = dx*n + dy*c;
       v.rot = ang - pw.rot;                        // stored LOCAL to the parent
     }
   }
@@ -3232,14 +3351,18 @@ function addBone(parentId, start, end){
      the array, so a push can never break the parents-before-children order that
      boneWorld's single pass relies on. */
   rig.push(b);
-  setBoneRest(b.id, v);
+  /* Every view gets the same rest for it. They start identical and the author
+     then flips or re-fits the ones that need it - a bone drawn on the front
+     cannot know where the back view wants it. */
+  setBoneRestAll(b.id, v);
   return b;
 }
 /* Where a child hangs off its parent, and at what angle to it - the two numbers
    the IK polyline needs, since with an `off` the joint no longer lies along the
-   parent's own axis. */
-function jointOf(child, parentLen){
-  const a=(child.att==null?1:child.att)*parentLen, o=child.off||0;
+   parent's own axis. att/off are per view, so this takes an id. */
+function jointOf(childId, parentLen, v){
+  const r=restBone(childId,v);
+  const a=(r.att==null?1:r.att)*parentLen, o=r.off||0;
   return { len:Math.hypot(a,o), ang:Math.atan2(o,a) };
 }
 
@@ -3251,7 +3374,8 @@ function deleteBone(id){
     pushUndo();
     const dead=sub.map(b=>b.id);
     rig=rig.filter(b=>dead.indexOf(b.id)<0);
-    for(const d of dead){ delete bindPose[d]; for(const p of bonePose) delete p[d]; }
+    for(const d of dead){ for(const n of viewNames) delete restAt(n)[d];
+                          for(const p of bonePose) delete p[d]; }
     /* The shapes do NOT move: they are stored at rest all along, so losing a
        bone simply stops deforming them. */
     pruneSkin(dead);
@@ -3270,16 +3394,20 @@ function deleteBone(id){
    turns a left arm into a right one, so negating its local rot is the whole
    operation. A ROOT has no parent axis to mirror about, so it reflects about
    the canvas centre line instead - the same thing Flip H does to a shape. */
+/* It is a STRUCTURE op - it is how you build a second arm - so it mirrors the
+   rest in EVERY view, and it does not touch the poses at all: flipping the
+   mirror sense is what makes the copied delta swing the mirrored way. */
 function mirrorBones(list){
   const cx=cv.getBoundingClientRect().width/2;
   const set=new Set(list.map(b=>b.id));
   for(const b of list){
     b.side = b.side==='L' ? 'R' : b.side==='R' ? 'L' : '';
     const detached = b.parent==null || !set.has(b.parent);   // the head of what is moving
-    for(const p of [bindPose].concat(bonePose)){
-      const v=p[b.id]; if(!v) continue;
-      if(detached && b.parent==null){ v.rot=Math.PI-v.rot; if(v.x!=null) v.x=2*cx-v.x; }
-      else v.rot=-v.rot;
+    for(const n of viewNames){
+      const r=restAt(n)[b.id]; if(!r) continue;
+      if(detached && b.parent==null){ r.rot=Math.PI-r.rot; if(r.x!=null) r.x=2*cx-r.x; }
+      else r.rot=-r.rot;
+      r.mx = -(r.mx==null?1:r.mx);
     }
   }
   bumpBind();
@@ -3294,31 +3422,75 @@ function mirrorBones(list){
    perpendicular `off` both negate and only the HEAD has to be aimed: its new
    world rot is 2a minus the old one, less its parent's world rot to get back
    to a local one. IK goals are world points, so they reflect about the same
-   line - left where they were, the enforce pass would haul the limb back. */
+   line - left where they were, the enforce pass would haul the limb back.
+
+   IT IS THE CURRENT VIEW'S REST THAT FLIPS, and nothing else. That is the whole
+   answer to "the back view needs the arms on the other side": the front view is
+   untouched. The poses are not written at all - each bone's MIRROR SENSE flips
+   instead, so the one shared delta swings the mirrored way here and the
+   original way there. The algebra: the head's posed world rot was W = pw + rot,
+   and afterwards it is pw + (2a - W) - m*d = 2a - (W + m*d), which is exactly
+   the mirror of the posed bone. */
 function flipBone(id,axis){
   if(id==null) return;
   const sub=boneSubtree(id); if(!sub.length) return;
   const head=sub[0], alpha = axis==='v' ? 0 : Math.PI/2;
-  const poses=[bindPose].concat(bonePose);
-  const worlds=poses.map(boneWorld);          // ALL of them before anything is written
+  const R=restAt(view);
+  const W=boneWorld({},view);                 // this view's REST, before anything is written
   pushUndo();
-  for(let i=0;i<poses.length;i++){
-    const p=poses[i], W=worlds[i];
-    const o=W.get(head.id)||{x:0,y:0,rot:0};
-    const c=Math.cos(2*alpha), n=Math.sin(2*alpha);
-    const rx=(x,y)=>{ const dx=x-o.x, dy=y-o.y; return {x:o.x+c*dx+n*dy, y:o.y+n*dx-c*dy}; };
-    for(const b of sub){
-      const v=p[b.id]; if(!v) continue;
-      if(b===head){
-        const pw = b.parent!=null ? W.get(b.parent) : null;
-        v.rot = 2*alpha - o.rot - (pw?pw.rot:0);
-      } else v.rot = -v.rot;
-      if(v.ikx!=null){ const g=rx(v.ikx,v.iky); v.ikx=g.x; v.iky=g.y; }
-    }
-  }
+  const o=W.get(head.id)||{x:0,y:0,rot:0};
+  const c=Math.cos(2*alpha), n=Math.sin(2*alpha);
+  const rx=(x,y)=>{ const dx=x-o.x, dy=y-o.y; return {x:o.x+c*dx+n*dy, y:o.y+n*dx-c*dy}; };
   for(const b of sub){
-    if(b!==head) b.off = -(b.off||0);   // the head's origin is the pivot and does not move
-    if(axis==='h') b.side = b.side==='L' ? 'R' : b.side==='R' ? 'L' : '';
+    const r=R[b.id]; if(!r) continue;
+    if(b===head){
+      const pw = b.parent!=null ? W.get(b.parent) : null;
+      r.rot = 2*alpha - o.rot - (pw?pw.rot:0);
+      // a root's origin IS the pivot, so x,y do not move
+    } else {
+      r.rot = -r.rot;
+      r.off = -(r.off||0);       // the head's origin is the pivot and does not move
+    }
+    if(axis==='h') r.mx = -(r.mx==null?1:r.mx); else r.my = -(r.my==null?1:r.my);
+    /* `side` is NOT swapped any more. It used to be, back when a flip rewrote
+       the one document-wide skeleton; now it rewrites one VIEW's rest, and a
+       figure seen from behind has not swapped arms - the same left arm is
+       simply on the other side of the screen. Duplicate still swaps it, because
+       that one really does make the other arm. */
+  }
+  // the goals of THIS view, in every frame, reflect about the same line
+  for(const p of bonePose) for(const b of sub){
+    const g=goalOf(p,b.id,view); if(!g) continue;
+    const q=rx(g.x,g.y); setGoal(p,b.id,q.x,q.y,view);
+  }
+  bumpBind();
+  syncPalette(); render();
+}
+/* Copy this view's rest skeleton onto the other view, optionally MIRRORED about
+   the canvas centre line - which is the one-click answer to a back view, whose
+   arms are on the other side of the screen. The hierarchy is shared, so only
+   the rest and the goals move; `side` is a document-level label and stays put.
+   Mirroring is exactly mirrorBones' per-bone formula: a root's world rot goes
+   to pi - rot and its origin reflects, a child's local rot simply negates,
+   because local = child world - parent world and both reflect. */
+function copyRigTo(mirrored){
+  const dst=otherView();
+  if(!dst || dst===view || !rig.length) return;
+  pushUndo();
+  const cx=cv.getBoundingClientRect().width/2;
+  const src=restAt(view), R={};
+  for(const b of rig){ const r=src[b.id]; if(r) R[b.id]={...r}; }
+  if(mirrored) for(const b of rig){
+    const r=R[b.id]; if(!r) continue;
+    if(b.parent==null){ r.rot=Math.PI-r.rot; if(r.x!=null) r.x=2*cx-r.x; }
+    else { r.rot=-r.rot; r.off=-(r.off||0); }
+    r.mx = -(r.mx==null?1:r.mx);
+  }
+  restPose[dst]=R;
+  for(const p of bonePose) for(const b of rig){
+    const g=goalOf(p,b.id,view);
+    if(g) setGoal(p,b.id, mirrored?2*cx-g.x:g.x, g.y, dst);
+    else if(p[b.id] && p[b.id].ik) delete p[b.id].ik[dst];
   }
   bumpBind();
   syncPalette(); render();
@@ -3335,10 +3507,15 @@ function duplicateBone(id){
   for(const b of sub){                       // breadth first, so a parent is mapped first
     const c={ id:bid++, name:b.name, side:b.side,
               parent: b.parent!=null && map.has(b.parent) ? map.get(b.parent) : b.parent,
-              att:b.att, off:b.off||0, pinned:b.pinned, ikt:!!b.ikt };
+              pinned:b.pinned, ikt:!!b.ikt };
     map.set(b.id,c.id); rig.push(c); made.push(c);
-    bindPose[c.id]={...(bindPose[b.id]||{len:0,rot:0})};
-    for(let i=0;i<bonePose.length;i++) bonePose[i][c.id]={...(bonePose[i][b.id]||bindPose[c.id])};
+    // the rest in every view; the delta in every frame, minus the goals, which
+    // are re-seeded below or the copy would be hauled onto the original's target
+    for(const n of viewNames) restAt(n)[c.id]={...(restAt(n)[b.id]||REST0)};
+    for(let i=0;i<bonePose.length;i++){
+      const d=cloneDelta(bonePose[i][b.id]||{drot:0,klen:1});
+      delete d.ik; bonePose[i][c.id]=d;
+    }
   }
   mirrorBones(made);
   // a copied goal would sit on the ORIGINAL's target and haul the mirrored limb onto it
@@ -3385,11 +3562,11 @@ function addHumanoid(){
     const name=row[0], side=row[1], par=row[2], att=row[3], deg=row[4], fl=row[5];
     const world=deg*Math.PI/180, len=fl*H;
     const p = par!=null ? by.get(par) : null;
-    const b={ id:bid++, name:name, side:side, parent:p?p.id:null, att:att, off:0, pinned:false };
+    const b={ id:bid++, name:name, side:side, parent:p?p.id:null, pinned:false };
     rig.push(b);
-    const v={ len:len, rot: p ? world-p.world : world };
+    const v={ len:len, rot: p ? world-p.world : world, att:att, off:0, mx:1, my:1 };
     if(!p){ v.x=W/2; v.y=0.55*H; }
-    setBoneRest(b.id, v);
+    setBoneRestAll(b.id, v);
     by.set(name+(side?' '+side:''), {id:b.id, world:world});
   }
   selBone=by.get('Pelvis').id;
@@ -3397,13 +3574,9 @@ function addHumanoid(){
 }
 /* Is this ONE bone already sitting at its rest transform in frame f? It is what
    greys "Reset to Rest" out, so it runs on every syncBonePanel - which is once
-   per pose gesture - and is four float compares against bindPose, no boneWorld. */
-function boneAtRest(b,f){
-  const p=poseAt(f)[b.id], r=bindPose[b.id];
-  if(!p || !r) return true;
-  return Math.abs((p.len||0)-(r.len||0))<1e-6 && Math.abs((p.rot||0)-(r.rot||0))<1e-9 &&
-         Math.abs((p.x||0)-(r.x||0))<1e-6     && Math.abs((p.y||0)-(r.y||0))<1e-6;
-}
+   per pose gesture - and with the pose a DELTA it is four compares against zero,
+   no bind lookup and no boneWorld. */
+function boneAtRest(b,f){ return atRestDelta(poseAt(f)[b.id]); }
 /* Put ONE bone back where the rest skeleton has it, in this frame alone. The
    subtree is deliberately left as it is - its children hold their own local
    angles and simply ride along, which is what lets a bent arm be straightened
@@ -3412,9 +3585,7 @@ function boneAtRest(b,f){
 function resetBone(){
   const b=selBone!=null&&boneById(selBone); if(!b || boneAtRest(b,frame)) return;
   pushUndo();
-  const p=poseAt(frame), g=p[b.id]||{};
-  p[b.id]={...(bindPose[b.id]||{len:0,rot:0})};
-  if(g.ikx!=null){ p[b.id].ikx=g.ikx; p[b.id].iky=g.iky; }
+  zeroDelta(poseAt(frame), b.id);
   if(b.ikt) seedIKGoal(b,frame);
   rigRev++;
   enforceIKTargets(b.id);         // this bone held, every other goal honoured
@@ -3423,7 +3594,7 @@ function resetBone(){
 function resetPose(){
   if(!rig.length) return;
   pushUndo();
-  bonePose[frame]=clonePose(bindPose);
+  for(const b of rig) zeroDelta(poseAt(frame), b.id);
   // the goals go back to rest with the pose, or they would drag it straight out again
   for(const b of rig) if(b.ikt) seedIKGoal(b,frame);
   rigRev++;
@@ -3459,7 +3630,7 @@ function ikChain(B,stopId){
     const p=boneById(c.parent);
     // stopId is the bone under the cursor: an enforced goal may not rewrite it
     if(!p || p.pinned || p.id===stopId) break;
-    if(jointOf(c, (P[p.id]||{len:0}).len||0).len < 1) break;   // no segment to rotate
+    if(jointOf(c.id, boneLenOf(P,p.id)).len < 1) break;   // no segment to rotate
     chain.unshift(p); c=p;
   }
   return chain;
@@ -3484,7 +3655,7 @@ function solveIK(B,target,stopId){
   const d=[], phi=[]; let total=0;
   for(let i=0;i<=m;i++){
     d.push(dist(pts[i],pts[i+1])); total+=d[i];
-    phi.push(i<m ? jointOf(chain[i+1], W.get(chain[i].id).len).ang : 0);
+    phi.push(i<m ? jointOf(chain[i+1].id, W.get(chain[i].id).len).ang : 0);
   }
   const base={x:pts[0].x, y:pts[0].y};
   const step=(a,b,len)=>{ const dx=b.x-a.x, dy=b.y-a.y, L=Math.hypot(dx,dy);
@@ -3509,9 +3680,9 @@ function solveIK(B,target,stopId){
      Lengths are never touched by IK. */
   let pw = chain[0].parent!=null ? (W.get(chain[0].parent)||{rot:0}).rot : 0;
   for(let i=0;i<=m;i++){
-    if(d[i]<1e-6){ pw = pw + (p[chain[i].id].rot||0); continue; }   // undefined direction
+    if(d[i]<1e-6){ pw = pw + localRotOf(p, chain[i].id); continue; }   // undefined direction
     const ang=Math.atan2(pts[i+1].y-pts[i].y, pts[i+1].x-pts[i].x) - phi[i];
-    p[chain[i].id].rot = ang - pw;
+    setLocalRot(p, chain[i].id, ang - pw);
     pw = ang;
   }
   rigRev++;
@@ -3567,13 +3738,21 @@ function boneHandMove(w){
   if(!g || g.mode==='draw') return;
   const b=boneById(g.bone); if(!b) return;
   const p=poseAt(frame);
-  for(const k of Object.keys(g.pose0)) if(p[k]) p[k]={...g.pose0[k]};   // back to the grab
+  /* Back to the grab. An entry ABSENT at pointerdown has to go again, not be
+     left behind: a delta is created lazily on the first write, so a solve that
+     touched a bone which had none would otherwise survive into the next move
+     and the gesture would accumulate. */
+  for(const b of rig){ const d0=g.pose0[b.id];
+                       if(d0) p[b.id]=cloneDelta(d0); else delete p[b.id]; }
   rigRev++;
 
   if(g.mode==='bmove'){
-    const v=p[b.id];
-    v.x=(g.pose0[b.id].x||0)+(w.x-g.grab.x);
-    v.y=(g.pose0[b.id].y||0)+(w.y-g.grab.y);
+    /* The drag is in WORLD units and dx/dy are stored in the rest's own mirror
+       sense, so a reflected view's root moves with the cursor rather than
+       against it. */
+    const r=restBone(b.id), e=poseEntry(p,b.id), d0=g.pose0[b.id]||{};
+    e.dx=(d0.dx||0)+sgnX(r)*(w.x-g.grab.x);
+    e.dy=(d0.dy||0)+sgnY(r)*(w.y-g.grab.y);
     rigRev++;
   }else if(g.mode==='bfk'){
     /* ROTATE ONLY - the length is not touched. Dragging the end used to set it
@@ -3583,17 +3762,17 @@ function boneHandMove(w){
        ancestors, so it is stable through the drag. */
     const W=boneWorld(p), o=W.get(b.id);
     const pw = b.parent!=null ? (W.get(b.parent)||{rot:0}).rot : 0;
-    p[b.id].rot = Math.atan2(w.y-o.y, w.x-o.x) - pw;
+    setLocalRot(p, b.id, Math.atan2(w.y-o.y, w.x-o.x) - pw);
     rigRev++;
   }else if(g.mode==='bscale'){
     // along the bone's own axis from its pinned origin, so the origin never moves
     const W=boneWorld(p), o=W.get(b.id);
     const c=Math.cos(o.rot), n=Math.sin(o.rot);
-    p[b.id].len = Math.max(4, (w.x-o.x)*c + (w.y-o.y)*n);
+    setBoneLenP(p, b.id, Math.max(4, (w.x-o.x)*c + (w.y-o.y)*n));
     rigRev++;
   }else if(g.mode==='bikt'){
-    // the drag IS the goal: write it into the pose, then solve to it
-    const v=p[b.id]; if(v){ v.ikx=w.x; v.iky=w.y; }
+    // the drag IS the goal: write it into this view's goal, then solve to it
+    setGoal(p, b.id, w.x, w.y, view);
     solveIK(b,w);               // the tip is asked for the target's own position
   }
   /* This bone's OWN target follows the gesture - it is a handle on the bone and
@@ -3629,11 +3808,15 @@ function boneHandMove(w){
 
    Like every other bone gesture it is recomputed from a pointerdown snapshot
    each move, so a wandering drag lands where a straight one does. It works in
-   the space it draws - the current frame's - and writes that through as the
-   rest, which is what makes the knob land under the cursor. On a frame that is
-   POSED that also flattens the dragged bones' pose everywhere, since
-   `setBoneRest` writes one value into every frame: the rig is meant to be edited
-   at rest, and Add Bones has always done the same. */
+   REST space and draws it (rigAtRest), which is the honest version of what it
+   always meant: the rest is what it writes, so the rest is what it shows. It
+   used to draw the posed frame and then write that through, which flattened the
+   pose of every bone it touched in every frame. Nothing here deforms a shape -
+   the pose is a delta from this very rest, so moving the rest moves the shape's
+   bind and its pose together and D stays exactly what it was.
+
+   AND IT IS THE CURRENT VIEW'S REST ALONE. Re-fitting the back view is the case
+   this tool exists for; doing it used to take the front view with it. */
 function boneEditHit(world,p){
   const knob=b=>{ const w=world.get(b.id); if(!w) return null;
     if(dist(boneTip(w),p) < boneR(w)+4) return {bone:b, part:'tip'};
@@ -3651,7 +3834,7 @@ function boneEditHit(world,p){
 }
 /* A bone sitting exactly ON its parent's tip - the ordinary chain joint, which
    is the case where a joint has TWO bones meeting at it. */
-const atJoint = st => Math.abs((st.att==null?1:st.att)-1)<1e-3 && Math.abs(st.off||0)<0.5;
+const atJoint = st => !!st && Math.abs((st.att==null?1:st.att)-1)<1e-3 && Math.abs(st.off||0)<0.5;
 function boneEditDown(w,hit){
   if(!hit || !hit.bone){ selBone=null; boneGesture=null; syncPalette(); render(); return; }
   selBone=hit.bone.id;
@@ -3663,31 +3846,26 @@ function boneEditDown(w,hit){
      to be selected cannot change what a joint does. The selection stays on the
      bone that was pressed. */
   let gb=hit.bone, part=hit.part;
-  if(part==='root' && gb.parent!=null && atJoint(gb)){ gb=boneById(gb.parent); part='tip'; }
+  if(part==='root' && gb.parent!=null && atJoint(restBone(gb.id))){ gb=boneById(gb.parent); part='tip'; }
   pushUndo();
+  /* The whole of this view's rest as it was grabbed. It carries att/off, which
+     this gesture writes, so it is also what has to be put back before every
+     recompute - otherwise the second move measures against the first's output. */
   boneGesture={ mode:'bedit', part:part, bone:gb.id, grab:{x:w.x,y:w.y},
-                pose0:clonePose(poseAt(frame)),
-                // att/off are STRUCTURE and this writes them, so the originals
-                // have to be restored before every recompute
-                struct0:Object.fromEntries(rig.map(x=>[x.id,{att:x.att, off:x.off||0}])) };
+                rest0:JSON.parse(JSON.stringify(restAt(view))) };
   syncPalette(); render();
 }
-/* Just the transform. A pose entry may also carry ikx/iky, and a goal is per
-   frame - spreading one into setBoneRest would hand it to every frame that had
-   none of its own. */
-const restOf = v => (v.x!=null ? {len:v.len||0, rot:v.rot||0, x:v.x, y:v.y}
-                               : {len:v.len||0, rot:v.rot||0});
 /* Put a bone back exactly where it was in the world, under a parent that has
    moved: att/off resolve its origin in the parent's new frame and the local rot
    comes off the parent's new world rot. Its own len is untouched, so its tip
    lands back on the old one too - and everything below it, which is described
    relative to it, therefore does not move at all. */
-function refitBone(d, pw, d0, pose0){
+function refitBone(d, pw, d0){
   const dx=d0.x-pw.x, dy=d0.y-pw.y;
   const c=Math.cos(-pw.rot), n=Math.sin(-pw.rot);
-  if(pw.len>0.0001) d.att=(dx*c-dy*n)/pw.len;
-  d.off=dx*n+dy*c;
-  const dv=pose0[d.id]; if(dv) setBoneRest(d.id, {...restOf(dv), rot:d0.rot-pw.rot});
+  const v={ off:dx*n+dy*c, rot:d0.rot-pw.rot };
+  if(pw.len>0.0001) v.att=(dx*c-dy*n)/pw.len;
+  setBoneRest(d.id, v);
 }
 // where a child hangs, in a parent world that has just been rewritten
 function childOrigin(pwNew, st){
@@ -3698,17 +3876,17 @@ function childOrigin(pwNew, st){
 function boneEditMove(w){
   const g=boneGesture; if(!g || g.mode!=='bedit') return;
   const b=boneById(g.bone); if(!b) return;
-  // back to the structure as it was grabbed, or the second move measures against
+  // back to the rest as it was grabbed, or the second move measures against
   // the first one's output
-  for(const x of rig){ const st=g.struct0[x.id]; if(st){ x.att=st.att; x.off=st.off; } }
-  const W0=boneWorld(g.pose0), o=W0.get(b.id); if(!o) return;
-  const v0=g.pose0[b.id]||{len:0,rot:0};
+  const R=restAt(view);
+  for(const k of Object.keys(g.rest0)) R[k]={...g.rest0[k]};
+  const W0=boneWorld({},view), o=W0.get(b.id); if(!o) return;
   if(g.part==='tip'){
     /* The origin is a point in the PARENT's frame and nothing here touches an
        ancestor, so it holds still through the drag. */
     const pw = b.parent!=null ? (W0.get(b.parent)||{rot:0}).rot : 0;
     const nrot=Math.atan2(w.y-o.y, w.x-o.x), nlen=Math.max(4,dist(o,w));
-    setBoneRest(b.id, {...restOf(v0), len:nlen, rot:nrot-pw});
+    setBoneRest(b.id, {len:nlen, rot:nrot-pw});
     const bNew={x:o.x, y:o.y, rot:nrot, len:nlen};
     /* THE JOINT HAS TWO BONES ON IT and both of them adapt: this one is aimed at
        the cursor, and the one hanging off its tip re-aims and re-lengthens to
@@ -3717,28 +3895,28 @@ function boneEditMove(w){
        meet there however long the chain is. A child hanging off the MIDDLE of
        this bone is not part of the joint at all, so it is simply put back too. */
     for(const c of boneKids(b.id)){
-      const cv=g.pose0[c.id], c0=W0.get(c.id), st=g.struct0[c.id];
-      if(!cv || !c0 || !st) continue;
-      if(!atJoint(st)){ refitBone(c, bNew, c0, g.pose0); continue; }
+      const c0=W0.get(c.id), st=g.rest0[c.id];
+      if(!c0 || !st) continue;
+      if(!atJoint(st)){ refitBone(c, bNew, c0); continue; }
       const org=childOrigin(bNew, st), tip0=boneTip(c0);
       const crot=Math.atan2(tip0.y-org.y, tip0.x-org.x), clen=Math.max(4,dist(org,tip0));
-      setBoneRest(c.id, {...restOf(cv), len:clen, rot:crot-nrot});
+      setBoneRest(c.id, {len:clen, rot:crot-nrot});
       const cNew={x:org.x, y:org.y, rot:crot, len:clen};
       for(const d of boneKids(c.id)){
-        const d0=W0.get(d.id); if(d0) refitBone(d, cNew, d0, g.pose0);
+        const d0=W0.get(d.id); if(d0) refitBone(d, cNew, d0);
       }
     }
   }else if(b.parent==null){
-    setBoneRest(b.id, {...restOf(v0), x:w.x, y:w.y});   // the whole figure comes along
+    setBoneRest(b.id, {x:w.x, y:w.y});   // the whole figure comes along
   }else{
     // where it hangs off the parent, resolved in the parent's own frame - the
-    // same two lines addBone uses. att/off are structure, so every frame gets it
+    // same two lines addBone uses
     const pw=W0.get(b.parent);
     const dx=w.x-pw.x, dy=w.y-pw.y;
     const c=Math.cos(-pw.rot), n=Math.sin(-pw.rot);
-    if(pw.len>0.0001) b.att=(dx*c-dy*n)/pw.len;
-    b.off=dx*n+dy*c;
-    bumpBind();
+    const v={ off:dx*n+dy*c };
+    if(pw.len>0.0001) v.att=(dx*c-dy*n)/pw.len;
+    setBoneRest(b.id, v);
   }
   render();
 }
@@ -3849,7 +4027,7 @@ function bindToSkeleton(){
   const g=selGroup();
   if(!g.length || !rig.length) return;
   pushUndo();
-  const B=boneWorld(bindPose);
+  const B=boneWorld({},view);
   for(const s of g){
     /* A reference's pts are its placement box, not an outline, so it cannot be
        point-deformed: one bone, rigid, always. */
@@ -4044,7 +4222,7 @@ function boneCorners(w){
 const boneScaleHandles = w => { const c=boneCorners(w); return [c[1],c[2]]; };
 
 function bonePointerDown(w,e){
-  const W=boneWorld(poseAt(frame));
+  const W=boneWorld(rigPose(), view);
   /* In the split view the rig is drawn a column to the right of where it lives,
      so the cursor has to be brought back before it is tested against it - and
      with the columns apart nothing is underneath a bone any more, so it takes a
@@ -4092,7 +4270,7 @@ const BONE_SNAP=14;    // ...and one starting this close to its parent's tip joi
    itself resolves against - Draw Bones edits the rest skeleton. */
 function boneDrawStart(parentId, from){
   if(parentId==null || !from) return from;
-  const pw=boneWorld(bindPose).get(parentId);
+  const pw=boneWorld({},view).get(parentId);
   if(!pw) return from;
   const t=boneTip(pw);
   return dist(from,t)<BONE_SNAP ? t : from;
@@ -4157,6 +4335,8 @@ document.getElementById('boneFlipV').addEventListener('click',()=>flipBone(selBo
 document.getElementById('boneDel') .addEventListener('click',()=>deleteBone(selBone));
 document.getElementById('btnHumanoid') .addEventListener('click',addHumanoid);
 document.getElementById('btnResetPose').addEventListener('click',resetPose);
+document.getElementById('btnRigCopy') .addEventListener('click',()=>copyRigTo(false));
+document.getElementById('btnRigCopyM').addEventListener('click',()=>copyRigTo(true));
 
 /* =============================================================== skinning
    Shapes are stored AT REST and deformed when they are read. Baking a pose into
@@ -4190,14 +4370,20 @@ function skinOf(s){
 
 /* D = M_pose . M_bind^-1 per bone, as a similarity:
       D(p) = o_pose + k . R(dtheta) . (p - o_bind)
-   Memoised on (frame, rigRev) and computed ONCE per drawFrame - never per
+   Memoised on (frame, VIEW, rigRev) and computed ONCE per drawFrame - never per
    shape, which is the difference between this costing nothing and costing the
-   render loop. */
+   render loop. The view is in the key because the rest skeleton the bind half
+   comes from is per view.
+
+   f < 0 (REST_F) means "no deformation at all": the pose is a delta from the
+   rest, so an empty pose IS the rest and every D comes out the identity. That is
+   what Add Bones and Edit Bones draw against. */
 let _matKey='', _mats=null;
-function skinMats(f){
-  const key=f+':'+rigRev;
+function skinMats(f,v){
+  v = v || view;
+  const key=f+':'+v+':'+rigRev;
   if(key===_matKey && _mats) return _mats;
-  const B=boneWorld(bindPose), P=boneWorld(poseAt(f));
+  const B=boneWorld({},v), P=boneWorld(f<0?{}:poseAt(f), v);
   const M=new Map();
   for(const b of rig){
     const ob=B.get(b.id), op=P.get(b.id);
@@ -4224,14 +4410,16 @@ const applyD = (D,p) => ({ x: D.k*(D.c*p.x - D.n*p.y) + D.tx,
    a WeakMap rather than on the shape: a field would be carried straight into
    sceneToJSON's stringify and into every undo snapshot. */
 const skinCache = new WeakMap();
-function skinWeights(s){
+function skinWeights(s,v){
   const sk=skinOf(s);
   if(!sk) return null;
-  const key=bindRev+':'+s.pts.length+':'+sk.bones.join(',')+':'+sk.falloff;
+  v = v || view;
+  // the view is in the key too: the rest they are measured against is per view
+  const key=v+':'+bindRev+':'+s.pts.length+':'+sk.bones.join(',')+':'+sk.falloff;
   const hit=skinCache.get(s);
   if(hit && hit.key===key) return hit.w;
 
-  const B=boneWorld(bindPose);
+  const B=boneWorld({},v);
   const segs=sk.bones.map(id=>{ const w=B.get(id); return {id:id, a:w, b:boneTip(w)}; });
   const out=[];
   for(const p of s.pts){
@@ -4255,15 +4443,15 @@ function skinWeights(s){
 /* The one hook. NOTE the explicit second parameter: three call sites used to
    read `grp.flatMap(worldPts)`, which would hand this the ARRAY INDEX as a
    frame. They pass an arrow now. */
-function worldPts(s, f){
+function worldPts(s, f, v){
   const raw=s.pts.map(p=>toWorld(s,p));
   const sk=skinOf(s);
   if(!sk || !rig.length) return raw;
-  const M=skinMats(f==null?frame:f);
+  const M=skinMats(f==null?frame:f, v);
   let moved=false;
   for(const id of sk.bones){ const D=M.get(id); if(D && !D.id){ moved=true; break; } }
   if(!moved) return raw;                      // at rest, and this is the common case
-  const W=skinWeights(s);
+  const W=skinWeights(s, v);
   return raw.map((p,i)=>{
     const ws=W[i];
     let x=0,y=0,tot=0;
@@ -4279,10 +4467,10 @@ function worldPts(s, f){
    writes back through toLocal, which knows nothing about any of this, so Smear,
    Eraser and the outline warp are off while it is true - Reset pose is the way
    through. */
-function deformed(s,f){
+function deformed(s,f,v){
   const sk=skinOf(s);
   if(!sk) return false;
-  const M=skinMats(f==null?frame:f);
+  const M=skinMats(f==null?frame:f, v);
   for(const id of sk.bones){ const D=M.get(id); if(D && !D.id) return true; }
   return false;
 }
@@ -4297,10 +4485,10 @@ const warpable = s => editable(s) && !deformed(s);
    because a uniform k commutes with R and with the diagonal S. That is the same
    argument placeRef already relies on, and it is why a negative sx from a flip
    survives: nothing here ever decomposes the shape's own matrix. */
-function posedPlacement(s,f){
+function posedPlacement(s,f,v){
   const sk=skinOf(s);
   if(!sk) return s;
-  const M=skinMats(f==null?frame:f);
+  const M=skinMats(f==null?frame:f, v);
   const D=M.get(sk.bones[0]);
   if(!D || D.id) return s;
   const o=applyD(D,{x:s.x,y:s.y});
@@ -4434,7 +4622,13 @@ function setViewNames(kind, nFrames){
   clearSel();
   /* SYNCHRONOUSLY, in the same breath as the key swap above and for exactly the
      same reason: the render loop is always in flight, and one frame landing on a
-     bonePose that is short throws and the canvas is dead until reload. */
+     bonePose - or a restPose missing the key being switched to - throws and the
+     canvas is dead until reload. Each new view key is seeded from the old first
+     one, so changing kind keeps the skeleton it had. */
+  const seed = restPose[Object.keys(restPose)[0]] || {};
+  const nr={};
+  for(const v of viewNames) nr[v]=JSON.parse(JSON.stringify(seed));
+  restPose=nr;
   bonePose=[]; fitBonePose(n); bumpBind();
   selBone=null;
 }
@@ -4846,10 +5040,15 @@ function renderViewToDataURL(vName, opts){
   const from = (opts && opts.shapes) || ((views[vName]||[])[fi]||[]);
   const shapes = from.filter(s=>s.pts.length>=3);
   if(!shapes.length) return null;
+  /* Which view's REST the shapes are posed against. A named view that is not
+     the active one - a thumbnail falling back to the back view - has a rest
+     skeleton of its own; an explicit {shapes} list is the live selection and so
+     belongs to the view we are standing in. */
+  const pv = (opts && opts.shapes) ? view : vName;
 
   let x0=1e9,y0=1e9,x1=-1e9,y1=-1e9;
   for(const s of shapes){
-    const b=bbox(worldPts(s)), pad=s.lw/2+1;   // the outline straddles the path
+    const b=bbox(worldPts(s,fi,pv)), pad=s.lw/2+1;   // the outline straddles the path
     if(b.x0-pad<x0) x0=b.x0-pad;  if(b.y0-pad<y0) y0=b.y0-pad;
     if(b.x1+pad>x1) x1=b.x1+pad;  if(b.y1+pad>y1) y1=b.y1+pad;
   }
@@ -4861,7 +5060,7 @@ function renderViewToDataURL(vName, opts){
   cv.width=Math.max(1,Math.round(w*scale)); cv.height=Math.max(1,Math.round(h*scale));
   ctx.setTransform(scale,0,0,scale,-x0*scale,-y0*scale);
   ctx.clearRect(x0,y0,w,h);                   // transparent, no paper
-  for(const s of shapes) drawShape(s,{pframe:fi});
+  for(const s of shapes) drawShape(s,{pframe:fi, pview:pv});
   const url=cv.toDataURL('image/png');
 
   // drawShape paints no selection chrome, so nothing needs hiding for the export
@@ -4925,7 +5124,7 @@ document.getElementById('btnExport').addEventListener('click',exportPNG);
    while the fill still closes with a straight chord; a colour of "none" means
    do not render that part at all. */
 const SCENE_FORMAT  = 'charactersmith.scene';
-const SCENE_VERSION = 4;   // v4 added the bones block
+const SCENE_VERSION = 5;   // v5 made the rest per VIEW and the pose a delta
 
 function sceneToJSON(){
   const r = cv.getBoundingClientRect();
@@ -4948,13 +5147,24 @@ function sceneToJSON(){
     frameCount: frameCount(),
     views: vs,                                // views[key][frame]; array order IS draw order
     refs: refs,                               // imported drawings, one entry each
-    /* The skeleton. `rig` is the hierarchy, `bind` is the rest pose the skin
-       weights are measured against, and `pose` is one entry per FRAME. Each
-       shape carries its own { skin:{bones,falloff} } inside views above; the
-       weights themselves are derived on load and never written. */
+    /* The skeleton. `rig` is the hierarchy alone, `rest` is ONE REST SKELETON
+       PER VIEW - which is what the skin weights are measured against and where
+       att/off live - and `pose` is one DELTA FROM THAT REST per FRAME, shared
+       across the views. A rest entry's mx/my say whether that view's rest is a
+       reflection, which is what makes one shared delta swing the mirrored way
+       on a flipped back view. Each shape carries its own { skin:{bones,falloff} }
+       inside views above; the weights themselves are derived and never written. */
+    /* The pose is written NORMALISED - an entry for every bone of every frame,
+       zero where there is none. A delta is created lazily on the first write, so
+       the live pose is legitimately sparse and fitBonePose fills it on load;
+       without this a scene therefore came back textually different from the one
+       just saved, which is exactly the round trip everything here is checked by.
+       It is also the kinder shape for a game to read. */
     bones: { rig:  JSON.parse(JSON.stringify(rig)),
-             bind: JSON.parse(JSON.stringify(bindPose)),
-             pose: JSON.parse(JSON.stringify(bonePose)) },
+             rest: JSON.parse(JSON.stringify(restPose)),
+             pose: bonePose.map(p=>{ const q={};
+               for(const b of rig) q[b.id]=cloneDelta(p[b.id]||{drot:0,klen:1});
+               return q; }) },
     render: {
       shading: shading,                       // 'hatch' | 'gradient'
       light: { from:{x:LIGHT_FROM.x,y:LIGHT_FROM.y}, to:{x:LIGHT_TO.x,y:LIGHT_TO.y},
@@ -5013,6 +5223,44 @@ function migrateScene(o){
     // which is what settles frameCount.
     o.bones={ rig:[], bind:{}, pose:[] };
     o.version=4;
+  }
+  if(o.version<5){
+    /* The rest went PER VIEW and the pose became a delta from it. Every view
+       starts on the same rest with mirror sense +1, and every delta is measured
+       off the old single bind - so a v4 drawing comes out bit-identical, which
+       is the point. att/off move off the bone and into the rest, since a
+       mirrored view has to be able to hang a child on the other side. */
+    const bn = o.bones || {rig:[], bind:{}, pose:[]};
+    const rg = bn.rig || [], bind = bn.bind || {};
+    const order = o.viewOrder || ['front','back'];
+    const rest={};
+    for(const v of order){
+      const m={};
+      for(const b of rg){
+        const s0=bind[b.id]||{len:0,rot:0};
+        const e={ len:s0.len||0, rot:s0.rot||0,
+                  att:(b.att==null?1:b.att), off:b.off||0, mx:1, my:1 };
+        if(s0.x!=null){ e.x=s0.x; e.y=s0.y; }
+        m[b.id]=e;
+      }
+      rest[v]=m;
+    }
+    for(const b of rg){ delete b.att; delete b.off; }
+    const pose=(bn.pose||[]).map(pp=>{
+      const q={};
+      for(const k of Object.keys(pp||{})){
+        const s0=bind[k]||{len:0,rot:0}, e=pp[k]||{};
+        const d={ drot:(e.rot||0)-(s0.rot||0),
+                  klen:(s0.len>0.0001) ? (e.len||0)/s0.len : 1 };
+        if(s0.x!=null || e.x!=null){ d.dx=(e.x||0)-(s0.x||0); d.dy=(e.y||0)-(s0.y||0); }
+        // one world goal served both views when both had the same skeleton
+        if(e.ikx!=null){ d.ik={}; for(const v of order) d.ik[v]={x:e.ikx, y:e.iky}; }
+        q[k]=d;
+      }
+      return q;
+    });
+    o.bones={ rig:rg, rest:rest, pose:pose };
+    o.version=5;
   }
   return o;
 }
@@ -5085,7 +5333,14 @@ function sceneFromJSON(raw){
      with poseAt(frame) undefined. */
   const bn = o.bones || {};
   rig      = Array.isArray(bn.rig) ? bn.rig : [];
-  bindPose = bn.bind || {};
+  /* One rest per view. A view the scene does not carry a rest for falls back to
+     a COPY of the first one's, never a shared reference - two views sharing a
+     rest object would have an edit to one silently rewrite the other, which is
+     the whole bug this format exists to fix. */
+  const rs = bn.rest || {};
+  restPose = {};
+  for(const n of viewNames)
+    restPose[n] = rs[n] ? rs[n] : JSON.parse(JSON.stringify(rs[viewNames[0]] || {}));
   bonePose = Array.isArray(bn.pose) ? bn.pose : [];
   fitBonePose(frameCount());
   // bone ids are their own namespace, and need the same sweep the shape uid gets
@@ -5135,7 +5390,7 @@ function sceneFromJSON(raw){
 function newScene(kind){
   pauseAnim();
   // Before setViewNames, so its pose rebuild starts from an empty skeleton.
-  rig=[]; bindPose={}; bonePose=[]; bid=1; selBone=null; boneMode=false; boneTool='bdraw';
+  rig=[]; restPose={}; bonePose=[]; bid=1; selBone=null; boneMode=false; boneTool='bdraw';
   skinHideBound=false; splitCache={key:'',dx:0};
   setViewNames(kind||'character');            // empties and re-keys views, rebuilds the switch
   refLib.clear();
@@ -6288,7 +6543,7 @@ function objectSceneFrom(shapes, kind){
   o.frameCount=nF;
   o.views=v;
   o.refs=refs;
-  o.bones={ rig:[], bind:{}, pose:[] };     // an object starts unrigged
+  o.bones={ rig:[], rest:{}, pose:[] };     // an object starts unrigged
   o.editor.activeView=names[0];
   o.editor.activeFrame=0;
   return o;
