@@ -91,6 +91,12 @@
   /* Two rows: the frame chips on their own, everything else under them. The
      chips are the thing you aim at constantly and they were being pushed about
      by the buttons as soon as a drawing had a few frames. */
+  /* The build number, bottom right of the stage. Inert - it is a label, not a
+     control, so it must never take a press away from the canvas. */
+  #version{
+    position:absolute;right:10px;bottom:8px;z-index:10;pointer-events:none;
+    color:var(--muted);opacity:.55;font-size:10px;letter-spacing:.06em;
+  }
   #animbar{
     position:absolute;bottom:12px;left:50%;transform:translateX(-50%);
     display:flex;flex-direction:column;gap:5px;align-items:center;z-index:10;
@@ -511,6 +517,7 @@
 
 <div id="stage">
   <canvas id="cv"></canvas>
+  <div id="version"></div>
   <div id="topbar">
     <div class="seg" id="viewSeg">
       <button data-view="front" class="on">Front<span class="kbd">Q</span></button>
@@ -761,6 +768,15 @@
 <div id="galleryScreen" class="screen hidden">
   <div id="galleryBar">
     <h1>Gallery</h1>
+    <!-- Kind filter. All of them by default; it is a view of the rows already
+         fetched, so switching costs no query. -->
+    <div class="seg compact" id="galleryKinds">
+      <button data-gkind="all" class="on">All</button>
+      <button data-gkind="character">Images</button>
+      <button data-gkind="item">Items</button>
+      <button data-gkind="mouths">Mouths</button>
+      <button data-gkind="eyes">Eyes</button>
+    </div>
     <div id="galleryWho"></div>
     <button class="btn" id="btnLogout">Log out</button>
   </div>
@@ -797,6 +813,12 @@ window.dispatchEvent(new Event('sb-ready'));
 const cv   = document.getElementById('cv');
 const ctx  = cv.getContext('2d');
 const stage= document.getElementById('stage');
+
+/* The build number of the app itself, shown in the bottom right of the stage.
+   It is NOT the scene format version (SCENE_VERSION) - that one is data and is
+   what migrateScene gates on. Bump the minor part for a feature, the patch part
+   for a fix, and bump it in the same commit as the change. */
+const APP_VERSION = '1.1.0';
 
 /* ---------------------------------------------------------------- state */
 /* A document is one of four kinds. A character and an item have a front and a
@@ -2168,18 +2190,26 @@ cv.addEventListener('pointerdown',e=>{
   /* The skeleton overlay is the opposite bargain: the rig is just a set of
      handles floating over the ordinary editor, so it claims a press only when
      one actually lands on a bone and everything else falls through to whatever
-     tool is up. */
+     tool is up.
+     ...but only under the HAND. The other three tools are aimed at the artwork,
+     and a bone or a crosshair lying over a shape used to swallow the press: a
+     smear or an eraser sweep that started on a limb posed the limb instead, and
+     there was no way to reach the shape underneath at all. `posing` is the same
+     condition syncPalette uses to swap in the bone panel, so what the sidebar is
+     showing and what a press will hit can never disagree. */
+  const rigArmed = poseOverlay && tool==='hand';
+
   /* An IK target is grabbable wherever it is DRAWN, and it is drawn exactly
      when the skeleton is - so it rides the same guard. Tested BEFORE the
      overlay's bones, because a target sitting under one still has to be
      reachable, and it costs nothing at all when no bone has one. */
-  if(rigVisible() && rig.some(b=>b.ikt)){
+  if(rigArmed && rigVisible() && rig.some(b=>b.ikt)){
     const BW=boneWorld(poseAt(frame));
     const it=ikTargetHit(BW,w);
     if(it){ clearSel(); ikTargetDown(w,it); return; }
   }
 
-  if(poseOverlay && rig.length){
+  if(rigArmed && rig.length){
     const BW=boneWorld(poseAt(frame));
     const hit=boneHit(BW,w);
     // the Hand is aimed at one thing at a time: taking a bone drops the shapes,
@@ -2418,10 +2448,16 @@ function endStroke(){
 /* A shape joins the selection if its bounding box overlaps the drawn box - the
    forgiving test, so you can lasso a crowd without enclosing every last pixel. */
 function finishMarquee(){
-  const x0=Math.min(marquee.x0,marquee.x1), x1=Math.max(marquee.x0,marquee.x1);
-  const y0=Math.min(marquee.y0,marquee.y1), y1=Math.max(marquee.y0,marquee.y1);
+  /* The box is drawn in screen coordinates, and in the Skinning split view the
+     artwork is drawn a column to the LEFT of where it lives - so the box has to
+     be carried back into world space before it is tested against the shapes.
+     `dx` is splitDX() as it was at pointerdown; it is 0 everywhere else. */
+  const D=marquee.dx||0;
+  const x0=Math.min(marquee.x0,marquee.x1)+D, x1=Math.max(marquee.x0,marquee.x1)+D;
+  const y0=Math.min(marquee.y0,marquee.y1),   y1=Math.max(marquee.y0,marquee.y1);
   if(x1-x0<4 && y1-y0<4) return;                  // that was a click, not a box
   const hit=cur().filter(sh=>{
+    if(skinHidden(sh)) return false;              // a shape you cannot see is not selectable
     const b=bbox(worldPts(sh));
     return b.x1>=x0 && b.x0<=x1 && b.y1>=y0 && b.y0<=y1;
   });
@@ -2497,11 +2533,10 @@ function tryCarve(w){
   const R = carve.mode==='erase'?eraserR:smearR;
   if(!carve.locked){
     // A selection claims the tool outright - that is the only way to reach an
-    // outline buried under other shapes. The smear takes the WHOLE selection, so a
-    // group can be pushed about in one gesture; the eraser stays on the anchor
-    // shape, because rubbing a group away at once is not something you can aim.
+    // outline buried under other shapes. BOTH tools take the WHOLE selection, so
+    // a group can be pushed about, or rubbed away, in one gesture.
     let group;
-    if(selected)  group = carve.mode==='smear' ? selGroup() : [selected];
+    if(selected)  group = selGroup();
     else { const s = outlineNear(w,R); group = s ? [s] : []; }
     // An imported reference cannot be carved. Dropping it from the group must not
     // leave the tool dead everywhere - a selection claims the tool outright, so a
@@ -3223,7 +3258,7 @@ const BTOOL_HINTS={
   bdraw:'',
   bedit:'Drag the joints to re-align the skeleton. It edits the REST pose OF THIS VIEW, so nothing you drag here deforms a shape and the other view keeps its own fit.',
   bhand:'Drag a bone to swing it; the corner handles scale it. A bone an IK target already poses does not take a drag - move its target instead.',
-  bskin:'Click a shape to select it, then a bone to attach it to. The bones only take a click on their end circles here, so shapes underneath stay reachable.'
+  bskin:'Click a shape to select it, shift-click or drag a box to take several, then a bone to attach them to. The bones only take a click on their end circles here, so shapes underneath stay reachable.'
 };
 function syncBonePanel(){
   /* The panel is also borrowed by Draw mode's posing (see syncPalette), where
@@ -3967,7 +4002,15 @@ function boneSkinDown(w,hit,e){
        started again. */
     const sk=skinOf(s);
     if(sk && !add) selBone=sk.bones[0];   // bones[0] is the strongest by construction
-  }else if(!e || !e.shiftKey){ clearSel(); }
+  }else{
+    /* Empty paper: drag a box to pick a crowd of shapes at once, exactly as the
+       Hand does. Attach, Auto-Attach and Remove all loop over selGroup(), so a
+       marquee is the whole of "multi-select" here - and it is what makes binding
+       a whole limb's worth of shapes one gesture rather than a shift-click each.
+       The box is in screen space; splitDX() carries it back (see finishMarquee). */
+    if(!e || !e.shiftKey) clearSel();
+    marquee={x0:w.x, y0:w.y, x1:w.x, y1:w.y, add:!!(e&&e.shiftKey), dx:SD};
+  }
   syncPalette(); render();
 }
 
@@ -4254,6 +4297,7 @@ function bonePointerDown(w,e){
   boneSkinDown(w,hit,e);
 }
 function bonePointerMove(w){
+  if(marquee){ marquee.x1=w.x; marquee.y1=w.y; return; }   // the Skinning tool's lasso
   if(!boneGesture) return;
   if(boneGesture.mode==='draw'){ boneGesture.tip=w; return; }
   if(boneGesture.mode==='bedit'){ boneEditMove(w); return; }
@@ -4276,6 +4320,7 @@ function boneDrawStart(parentId, from){
   return dist(from,t)<BONE_SNAP ? t : from;
 }
 function bonePointerUp(){
+  if(marquee){ finishMarquee(); marquee=null; syncPalette(); render(); }
   const g=boneGesture; boneGesture=null;
   if(!g) return;
   if(g.mode==='draw'){
@@ -5636,6 +5681,22 @@ function svgIcon(paths,cls){
   return s;
 }
 
+/* The kind filter is a view of the rows already fetched, so switching tabs
+   costs no query - which is why the listing is kept here. 'all' is the default
+   and is what a fresh visit to the gallery always shows. */
+let galleryKind='all', galleryRows=[];
+
+function setGalleryKind(k){
+  if(galleryKind===k) return;
+  galleryKind=k;
+  document.querySelectorAll('#galleryKinds button')
+    .forEach(b=>b.classList.toggle('on', b.dataset.gkind===k));
+  paintGallery();
+}
+document.getElementById('galleryKinds').addEventListener('click',e=>{
+  const b=e.target.closest('button[data-gkind]'); if(b) setGalleryKind(b.dataset.gkind);
+});
+
 async function renderGallery(){
   const grid=document.getElementById('galleryGrid');
   document.getElementById('galleryWho').textContent =
@@ -5645,18 +5706,28 @@ async function renderGallery(){
   loading.className='gnote'; loading.textContent='Loading...';
   grid.appendChild(loading);
 
-  let rows=[];
-  try{ rows=await listDrawings(); }
+  try{ galleryRows=await listDrawings(); }
   catch(err){
+    galleryRows=[];
     grid.textContent='';
     const n=document.createElement('div');
     n.className='gnote'; n.textContent='Could not reach Supabase: '+(err.message||err);
     grid.appendChild(n);
     return;
   }
-  grid.textContent='';
+  paintGallery();
+}
 
-  // the empty canvas always sits first
+function paintGallery(){
+  const grid=document.getElementById('galleryGrid');
+  grid.textContent='';
+  const rows = galleryKind==='all'
+    ? galleryRows
+    : galleryRows.filter(r=>(r.kind||'character')===galleryKind);
+
+  // the empty canvas always sits first - but only where a new drawing would
+  // actually land, which is a character. New drawing has no kind picker.
+  if(galleryKind==='all' || galleryKind==='character'){
   const nw=document.createElement('div');
   nw.className='gcard new';
   const nwt=document.createElement('div');
@@ -5669,6 +5740,13 @@ async function renderGallery(){
   // kinds are reached through Make Object, which names its own kind.
   nw.addEventListener('click',()=>{ newScene('character'); goScreen('draw'); });
   grid.appendChild(nw);
+  }
+
+  if(!rows.length){
+    const n=document.createElement('div');
+    n.className='gnote'; n.textContent='Nothing here yet.';
+    grid.appendChild(n);
+  }
 
   for(const row of rows){
     const gone=!!row.deleted_at;
@@ -5713,13 +5791,16 @@ async function renderGallery(){
       card.appendChild(del);
     }
 
-    // admins get the author under the thumbnail - that is the only extra
+    /* The NAME is what identifies a drawing, so it is always what the card says.
+       An admin, who is looking at everyone's work, gets the author after it -
+       that is the only extra. */
     const meta=document.createElement('div'); meta.className='gmeta';
     const kd=DOC_KINDS[row.kind||'character'];
     const tag=(kd && row.kind && row.kind!=='character') ? ' \u00b7 '+kd.label : '';
-    meta.textContent = session.is_admin
-      ? ((row.cs_users&&row.cs_users.username)||'unknown')+tag+(gone?' - deleted':'')
-      : (row.title||'Untitled')+tag;
+    const who=session.is_admin
+      ? ' \u00b7 '+((row.cs_users&&row.cs_users.username)||'unknown') : '';
+    meta.textContent=(row.title||'Untitled')+tag+who+(gone?' - deleted':'');
+    meta.title=meta.textContent;
     card.appendChild(meta);
 
     grid.appendChild(card);
@@ -6803,6 +6884,11 @@ window.addEventListener('keydown',e=>{
 });
 
 /* ================================================================== boot */
+{
+  const vEl=document.getElementById('version');
+  vEl.textContent='v'+APP_VERSION;
+  vEl.title='Drawthing v'+APP_VERSION+' · scene format v'+SCENE_VERSION;
+}
 resize();
 setViewNames('character');    // builds the view switch; the markup only seeds it
 setView(viewNames[0]);
