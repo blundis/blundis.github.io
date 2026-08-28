@@ -694,6 +694,7 @@
      <div class="prow">
        <label class="chk"><input type="checkbox" id="boneIkt"> IK target</label>
      </div>
+     <div class="prow"><button class="pbtn" id="boneRest">Reset to Rest</button></div>
      <div class="prow">
        <button class="pbtn" id="boneDup">Duplicate</button>
        <button class="pbtn" id="boneFlip">Flip</button>
@@ -1802,17 +1803,23 @@ function drawBones(){
 }
 
 /* ------------------------------------------------------------ IK targets
-   A per-bone marker sitting IKT_OFF past the bone's TIP, along the bone's own
-   direction, toggled by "IK target" in the bone panel.
+   A per-bone marker sitting ON the bone's TIP, toggled by "IK target" in the
+   bone panel.
 
-   It is drawn OUTSIDE drawBones on purpose. drawBones returns on rigVisible(),
-   and the whole point of the toggle is that a target stays on screen in Draw
-   mode with the skeleton hidden - so it cannot sit behind that guard. It still
-   takes the split view's rig-side offset, because it hangs off a bone. */
-const IKT_OFF = 26, IKT_R = 6;
+   It is drawn OUTSIDE drawBones because drawBones has a pile of its own state
+   to set up, but it is gated on the SAME rigVisible(): a target is part of the
+   skeleton, so it comes and goes with it. In Draw mode that means the animation
+   bar's skeleton checkbox. It still takes the split view's rig-side offset,
+   because it hangs off a bone.
+
+   The seed is the TIP EXACTLY, with no offset of any kind. The goal is a goal
+   for the tip, so a seed anywhere else is a pose change the author did not ask
+   for: it used to be dropped 26px past the tip, and every targeted limb then
+   popped out to reach it the moment the skeleton was touched. Nothing about the
+   crosshair's own placement may move a bone. */
+const IKT_R = 10;
 // Where a target sits before it has been placed. Only ever a SEED.
-const ikTargetPos = w => ({ x: w.x + Math.cos(w.rot)*(w.len+IKT_OFF),
-                            y: w.y + Math.sin(w.rot)*(w.len+IKT_OFF) });
+const ikTargetPos = w => boneTip(w);
 
 /* A goal is a WORLD point, and it is per FRAME: it lives on the pose entry as
    ikx/iky, so clonePose, snapshot(), the scene's bones.pose, frame duplication
@@ -1845,41 +1852,50 @@ function clearIKGoal(b){
 function enforceIKTargets(stopId){
   if(!rig.some(b=>b.ikt)) return;
   const p=poseAt(frame);
-  for(let pass=0; pass<2; pass++)
+  // FOUR passes, not two. Two limbs whose chains share an ancestor take turns
+  // pulling it about, and two rounds left the earlier one of them up to ~18px
+  // off its goal after a single large move - which reads as exactly the pop the
+  // targets exist to stop. A whole enforce is 0.016ms, so the extra rounds are
+  // free; past four nothing moves.
+  for(let pass=0; pass<4; pass++)
     for(const b of rig){
       const v=p[b.id];
       if(!b.ikt || !v || v.ikx==null) continue;
-      solveIK(b, {x:v.ikx, y:v.iky}, IKT_OFF, stopId);
+      solveIK(b, {x:v.ikx, y:v.iky}, stopId);
     }
 }
-/* A press on a target drives IK. The target is a RIGID extension of the bone,
-   so the solve is the ordinary one with the last segment lengthened by IKT_OFF
-   - which is exactly what dragging the tip does, at a longer lever. */
+/* A press on a target drives IK: the goal is where the bone's TIP is asked to
+   go, so it is exactly what dragging the tip does, at whatever lever the target
+   happens to be sitting at.
+
+   The pick radius is generous and the NEAREST target wins, because a target
+   sitting under a bone still has to be grabbable - that is the whole reason it
+   is tested before the bones are. */
 function ikTargetHit(world,p){
   const pose=poseAt(frame);
-  for(let i=rig.length-1;i>=0;i--){
-    if(!rig[i].ikt || !world.get(rig[i].id)) continue;
-    if(dist(ikGoalOf(rig[i],pose,world),p) < IKT_R+4) return rig[i];
+  let best=null, bd=IKT_R+8;
+  for(const b of rig){
+    if(!b.ikt || !world.get(b.id)) continue;
+    const d=dist(ikGoalOf(b,pose,world),p);
+    if(d<bd){ bd=d; best=b; }
   }
-  return null;
+  return best;
 }
 function drawIKTargets(){
-  if(!rig.length || !rig.some(b=>b.ikt)) return;
+  // part of the skeleton, so it is shown exactly when the skeleton is
+  if(!rigVisible() || !rig.some(b=>b.ikt)) return;
   const pose=poseAt(frame), W=boneWorld(pose);
   ctx.save();
   const SD=splitDX(); if(SD) ctx.translate(SD,0);
   ctx.lineCap='round'; ctx.lineJoin='round';
-  const shown=rigVisible();
   for(const b of rig){
     if(!b.ikt) continue;
     const w=W.get(b.id); if(!w) continue;
     const p=ikGoalOf(b,pose,W);
-    // ...and the one being dragged lights up even with the skeleton hidden
-    const on = (shown && b.id===selBone) ||
+    const on = b.id===selBone ||
                (!!boneGesture && boneGesture.mode==='bikt' && boneGesture.bone===b.id);
-    // a dotted leader back to the tip says which bone a target belongs to -
-    // only worth drawing when the bone it points at is on screen
-    if(shown){
+    // a dotted leader back to the tip says which bone a target belongs to
+    {
       const t=boneTip(w);
       ctx.beginPath(); ctx.moveTo(t.x,t.y); ctx.lineTo(p.x,p.y);
       ctx.setLineDash([2,4]); ctx.lineWidth=1.3;
@@ -2022,20 +2038,26 @@ cv.addEventListener('pointerdown',e=>{
      handles floating over the ordinary editor, so it claims a press only when
      one actually lands on a bone and everything else falls through to whatever
      tool is up. */
-  /* An IK target is grabbable wherever it is DRAWN, which includes Draw mode
-     with the skeleton hidden - that is what the toggle is for. Tested before
-     the overlay's bones and before any tool, and it costs nothing at all when
-     no bone has one. */
-  if(rig.length && rig.some(b=>b.ikt)){
+  /* An IK target is grabbable wherever it is DRAWN, and it is drawn exactly
+     when the skeleton is - so it rides the same guard. Tested BEFORE the
+     overlay's bones, because a target sitting under one still has to be
+     reachable, and it costs nothing at all when no bone has one. */
+  if(rigVisible() && rig.some(b=>b.ikt)){
     const BW=boneWorld(poseAt(frame));
     const it=ikTargetHit(BW,w);
-    if(it){ ikTargetDown(w,it); return; }
+    if(it){ clearSel(); ikTargetDown(w,it); return; }
   }
 
   if(poseOverlay && rig.length){
     const BW=boneWorld(poseAt(frame));
     const hit=boneHit(BW,w);
-    if(hit){ boneHandDown(w,hit,BW); return; }
+    // the Hand is aimed at one thing at a time: taking a bone drops the shapes,
+    // which is what lets the sidebar follow the press with no tie to break
+    if(hit){ clearSel(); boneHandDown(w,hit,BW); return; }
+    /* A press that misses every bone DESELECTS - exactly as bone mode's Hand
+       does - but it does not claim the press: it still falls through to
+       whatever tool is up. */
+    if(selBone!=null){ selBone=null; syncPalette(); }
   }
 
   if(tool==='brush'){
@@ -2978,8 +3000,14 @@ function syncPalette(){
   document.querySelectorAll('.toolopt').forEach(el=>el.classList.add('hidden'));
   document.getElementById(TOOL_PANELS[tool]).classList.remove('hidden');
 
-  // The selection block only exists when there is a selection to act on.
-  const grp=selGroup(), has=!!selected;
+  /* The selection block only exists when there is a selection to act on AND the
+     Hand is up. A selection deliberately survives a tool change - it is how
+     Smear and Eraser reach an outline buried under other shapes - but only the
+     Hand can make or change one, so on the other three the block was a set of
+     controls for something the tool you are holding cannot touch. The selection
+     is still drawn on the canvas there, which is what says it has claimed the
+     tool. */
+  const grp=selGroup(), has=!!selected && tool==='hand';
   document.getElementById('selSec').classList.toggle('hidden',!has);
   document.getElementById('selHead').textContent = grp.length>1 ? 'Selected shapes' : 'Selected shape';
   document.getElementById('selDiv').classList.toggle('hidden',!has);
@@ -3040,10 +3068,23 @@ function syncPalette(){
     b.classList.toggle('hidden', !bones);
     b.classList.toggle('active', bones && b.dataset.btool===boneTool);
   });
-  document.getElementById('paintPanel').classList.toggle('hidden', lib||bones);
+  /* ...and posing over the ordinary editor borrows the same panel. With the
+     skeleton floating over the artwork, or a bone selected, the Hand is aimed
+     at the rig rather than at a shape - so the colours are not what the sidebar
+     should be showing, the bone's own properties are. Only for the Hand: every
+     other tool still falls through to the artwork, and its colours with it. */
+  /* ...but a SHAPE selection wins it back. With the overlay up the Hand is
+     aimed at whichever of the two you last pressed, so the panel follows that
+     rather than the overlay's mere presence - otherwise selecting a shape while
+     posing left the sidebar showing the bone block and no shape controls at
+     all. Pressing a bone clears the shape selection (in the overlay's own arm of
+     pointerdown), so the two can never both be live and this can never flicker. */
+  const posing = !bones && !lib && canRig() && tool==='hand' && !selected &&
+                 (poseOverlay || selBone!=null) && rig.length>0;
+  document.getElementById('paintPanel').classList.toggle('hidden', lib||bones||posing);
   document.getElementById('libPanel')  .classList.toggle('hidden',!lib);
-  document.getElementById('bonePanel') .classList.toggle('hidden',!bones);
-  if(bones) syncBonePanel();
+  document.getElementById('bonePanel') .classList.toggle('hidden',!(bones||posing));
+  if(bones||posing) syncBonePanel();
 }
 
 /* ------------------------------------------------------- the bone sidebar */
@@ -3053,10 +3094,15 @@ const BTOOL_HINTS={
   bskin:'Click a shape to select it, then a bone to attach it to. The bones only take a click on their end circles here, so shapes underneath stay reachable.'
 };
 function syncBonePanel(){
+  /* The panel is also borrowed by Draw mode's posing (see syncPalette), where
+     there is no bone TOOL to name - only the bone itself and what can be done
+     to it, plus the one posing button. */
   document.getElementById('boneToolName').textContent=BTOOL_NAMES[boneTool];
   document.getElementById('boneHint').textContent=BTOOL_HINTS[boneTool]||'';
+  document.getElementById('boneToolName').classList.toggle('hidden',!boneMode);
+  document.getElementById('boneHint')    .classList.toggle('hidden',!boneMode);
   document.querySelectorAll('.btoolopt').forEach(el=>el.classList.add('hidden'));
-  document.getElementById(BTOOL_PANELS[boneTool]).classList.remove('hidden');
+  document.getElementById(boneMode ? BTOOL_PANELS[boneTool] : 'optBHand').classList.remove('hidden');
 
   const b = selBone!=null ? boneById(selBone) : null;
   document.getElementById('boneSec')  .classList.toggle('hidden',!b);
@@ -3069,6 +3115,7 @@ function syncBonePanel(){
     document.getElementById('boneR').checked  = b.side==='R';
     document.getElementById('bonePin').checked= !!b.pinned;
     document.getElementById('boneIkt').checked= !!b.ikt;
+    document.getElementById('boneRest').disabled = boneAtRest(b,frame);
     const p=poseAt(frame)[b.id]||{len:0,rot:0};
     const kids=boneKids(b.id).length;
     document.getElementById('boneFacts').innerHTML=
@@ -3278,6 +3325,31 @@ function addHumanoid(){
   selBone=by.get('Pelvis').id;
   syncPalette(); render();
 }
+/* Is this ONE bone already sitting at its rest transform in frame f? It is what
+   greys "Reset to Rest" out, so it runs on every syncBonePanel - which is once
+   per pose gesture - and is four float compares against bindPose, no boneWorld. */
+function boneAtRest(b,f){
+  const p=poseAt(f)[b.id], r=bindPose[b.id];
+  if(!p || !r) return true;
+  return Math.abs((p.len||0)-(r.len||0))<1e-6 && Math.abs((p.rot||0)-(r.rot||0))<1e-9 &&
+         Math.abs((p.x||0)-(r.x||0))<1e-6     && Math.abs((p.y||0)-(r.y||0))<1e-6;
+}
+/* Put ONE bone back where the rest skeleton has it, in this frame alone. The
+   subtree is deliberately left as it is - its children hold their own local
+   angles and simply ride along, which is what lets a bent arm be straightened
+   at the shoulder without losing the elbow. The bone's own goal is re-seeded,
+   or the enforce pass would drag it straight back out again. */
+function resetBone(){
+  const b=selBone!=null&&boneById(selBone); if(!b || boneAtRest(b,frame)) return;
+  pushUndo();
+  const p=poseAt(frame), g=p[b.id]||{};
+  p[b.id]={...(bindPose[b.id]||{len:0,rot:0})};
+  if(g.ikx!=null){ p[b.id].ikx=g.ikx; p[b.id].iky=g.iky; }
+  if(b.ikt) seedIKGoal(b,frame);
+  rigRev++;
+  enforceIKTargets(b.id);         // this bone held, every other goal honoured
+  syncPalette(); render();
+}
 function resetPose(){
   if(!rig.length) return;
   pushUndo();
@@ -3323,19 +3395,18 @@ function ikChain(B,stopId){
   return chain;
 }
 
-/* `extra` lengthens the LAST segment, which is how an IK target drives the
-   chain: the target is rigidly attached to B at IKT_OFF past its tip, so the
-   effector is that point rather than the tip. The extension is collinear with
-   the bone, so the write-back angle for the last link is unchanged (phi[m] is
-   0 either way) and nothing else in the solve has to know. */
+/* The effector is always the last bone's TIP - an IK target is a goal for that
+   tip and nothing else. (It used to lengthen the last segment by IKT_OFF and
+   solve for the target itself, which made the offset part of the chain: the
+   limb was asked to reach 26px past wherever you put the crosshair.) */
 const IK_ITERS = 10;
-function solveIK(B,target,extra,stopId){
+function solveIK(B,target,stopId){
   const p=poseAt(frame);
   const chain=ikChain(B,stopId), m=chain.length-1;
   const W=boneWorld(p);
   const pts=[];
   for(let i=0;i<=m;i++){ const w=W.get(chain[i].id); pts.push({x:w.x,y:w.y}); }
-  pts.push(extra ? ikTargetPos(W.get(chain[m].id)) : boneTip(W.get(chain[m].id)));
+  pts.push(boneTip(W.get(chain[m].id)));
   /* With an `off` a joint no longer sits on its parent's own axis, so the
      polyline segment stands at a fixed angle to the bone. phi is that angle,
      and it is what the write-back has to subtract - without it an offset bone
@@ -3445,7 +3516,7 @@ function boneHandMove(w){
   }else if(g.mode==='bikt'){
     // the drag IS the goal: write it into the pose, then solve to it
     const v=p[b.id]; if(v){ v.ikx=w.x; v.iky=w.y; }
-    solveIK(b,w,IKT_OFF);       // the effector is the target, not the tip
+    solveIK(b,w);               // the tip is asked for the target's own position
   }else{
     solveIK(b,w);
   }
@@ -3847,9 +3918,10 @@ function setBoneIkt(on){
   /* Seed the goal in EVERY frame, not just this one. A frame left without one
      would fall back to the derived position and so drift with its parents -
      which is exactly the behaviour the explicit goal exists to stop. */
+  // no enforce: the seed IS the tip, so turning a target on cannot move anything
   if(b.ikt) seedIKGoalAll(b); else clearIKGoal(b);
   rigRev++;
-  syncBonePanel(); render();
+  syncPalette(); render();
 }
 document.getElementById('boneName').addEventListener('change',commitBoneName);
 document.getElementById('boneName').addEventListener('blur',commitBoneName);
@@ -3857,6 +3929,7 @@ document.getElementById('boneL').addEventListener('change',()=>setBoneSide('L'))
 document.getElementById('boneR').addEventListener('change',()=>setBoneSide('R'));
 document.getElementById('bonePin').addEventListener('change',e=>setBonePin(e.target.checked));
 document.getElementById('boneIkt').addEventListener('change',e=>setBoneIkt(e.target.checked));
+document.getElementById('boneRest').addEventListener('click',resetBone);
 document.getElementById('boneDup') .addEventListener('click',()=>duplicateBone(selBone));
 document.getElementById('boneFlip').addEventListener('click',()=>flipBone(selBone));
 document.getElementById('boneDel') .addEventListener('click',()=>deleteBone(selBone));
@@ -5527,7 +5600,9 @@ document.getElementById('animSkel').addEventListener('change',e=>{
   poseOverlay=e.target.checked;
   if(poseOverlay) pauseAnim();
   else { selBone=null; boneGesture=null; }
-  syncFrames(); render();
+  // syncPalette, not just syncFrames: the sidebar swaps to the bone block while
+  // the Hand is aimed at the rig, and back to the colours when it is not.
+  syncPalette(); render();
 });
 
 document.getElementById('btnLibrary').addEventListener('click',()=>{
