@@ -103,7 +103,9 @@
   #animbar{
     position:absolute;bottom:12px;left:50%;transform:translateX(-50%);
     display:flex;flex-direction:column;gap:5px;align-items:center;z-index:10;
-    max-width:calc(100% - 24px);
+    /* max-content, or a flex column sizes each row to the narrowest it can wrap
+       to and the pill folds itself up even with the whole stage free */
+    width:max-content;max-width:calc(100% - 24px);
     background:rgba(35,32,30,.86);backdrop-filter:blur(6px);
     border:1px solid #171513;border-radius:11px;padding:6px;
   }
@@ -143,6 +145,18 @@
   #frameOwner{flex:0 0 auto;font-size:11px;color:var(--muted);padding:0 2px;max-width:150px;
     overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .fchip.named{width:auto;min-width:46px;padding:0 9px}
+  /* the animation row: which of the document's animations the chips belong to,
+     and how it plays back. Hidden on a fixed-frame kind, whose frames are the
+     named expressions a game swaps between rather than a timeline. */
+  #animRow select{
+    flex:0 0 auto;max-width:170px;background:var(--chrome-3);color:var(--ink);
+    border:1px solid #4a4441;border-radius:7px;font:inherit;font-size:11px;padding:4px 5px;
+  }
+  #animRow .alabel{font-size:11px;color:var(--muted);padding:0 2px}
+  /* drag and drop reordering of the frame chips */
+  .fchip[draggable]{cursor:grab}
+  .fchip.dragging{opacity:.4}
+  .fchip.drop{border-color:var(--accent);border-style:dashed}
 
   /* ---------- right palette ---------- */
   #palette{
@@ -545,6 +559,18 @@
   </div>
 
   <div id="animbar">
+    <!-- Which animation the chips below belong to, and its two playback flags.
+         A document holds many named animations; the frame chips are one of them. -->
+    <div class="arow" id="animRow">
+      <span class="alabel">Animation</span>
+      <select id="animSel"></select>
+      <label class="chk"><input type="checkbox" id="animLoop" checked> loop</label>
+      <label class="chk"><input type="checkbox" id="animPing"> ping-pong</label>
+      <button class="btn" id="btnAnimNew">New</button>
+      <button class="btn" id="btnAnimDup">Duplicate</button>
+      <button class="btn" id="btnAnimRen">Rename</button>
+      <button class="btn" id="btnAnimDel">Delete</button>
+    </div>
     <div class="arow">
       <span id="frameOwner" class="hidden"></span>
       <div id="frames"></div>
@@ -554,9 +580,9 @@
       <!-- Posing does not need bone mode: this floats the rig over the ordinary
            editor as a set of draggable handles. Nothing to show without one. -->
       <label class="chk" id="skelLbl"><input type="checkbox" id="animSkel"> skeleton</label>
-      <button class="btn" id="btnFrameLeft">Copy Left</button>
-      <button class="btn" id="btnFrameRight">Copy Right</button>
-      <button class="btn" id="btnFrameDup">Duplicate</button>
+      <button class="btn" id="btnFrameCopy">Copy</button>
+      <button class="btn" id="btnFramePaste">Paste</button>
+      <button class="btn" id="btnFrameDup">Duplicate Frame</button>
       <button class="btn" id="btnPlay">Play<span class="kbd">Space</span></button>
       <button class="btn" id="btnStop">Stop</button>
     </div>
@@ -833,7 +859,7 @@ const stage= document.getElementById('stage');
    It is NOT the scene format version (SCENE_VERSION) - that one is data and is
    what migrateScene gates on. Bump the minor part for a feature, the patch part
    for a fix, and bump it in the same commit as the change. */
-const APP_VERSION = '1.3.0';
+const APP_VERSION = '1.4.0';
 
 /* ---------------------------------------------------------------- state */
 /* A document is one of four kinds. A character and an item have a front and a
@@ -876,7 +902,81 @@ const frameCount = () => ((views[viewNames[0]]||[]).length)||1;
 const frameKind  = () => (DOC_KINDS[docKind]||DOC_KINDS.character).frames;
 const cur     = () => (views[view]||[])[frame] || [];
 let   playing = false, playTimer = 0;
+let   playDir = 1;             // ping-pong's current direction
 const FPS     = 12;
+
+/* ---------------------------------------------------------- the animations
+   A document holds MANY named animations - Walk, Run, Jump - and `views` above
+   is the CURRENT one's frames. Each animation carries its own frame list for
+   every view plus its own bone pose, so switching one is a swap of exactly the
+   two things a frame lives in: views[key][frame] and bonePose[frame].
+
+   The live globals are the authority while an animation is current, because
+   restore(), applyAnim and sceneFromJSON all REASSIGN views[n] wholesale - an
+   alias would silently detach at that point, which is the same trap the frame
+   list itself already documents. So `stashAnim` writes the live arrays back into
+   the record before anything reads the LIST, and `applyAnim` loads them out
+   again. Everything that walks the whole document goes through eachAnimViews. */
+const STD_ANIMS = ['Idle','Walk','Run','Jump','Land','Hurt','Fall','Die','Throw','Attack Melee'];
+let anims   = [];   // [{name, loop, pingpong, views:{key:[frames]}, pose:[delta]}]
+let animIdx = 0;
+const curAnim = () => anims[animIdx] || {name:'', loop:true, pingpong:false};
+/* Only a free-frame kind animates. An eye or a mouth sheet's frames are the
+   named expressions a game swaps between - a contract, not a timeline - so one
+   of those holds exactly one animation and the row is hidden. */
+const animsFree = () => frameKind()==='free';
+
+function blankAnim(name, nFrames){
+  const n=Math.max(1, nFrames|0);
+  const v={}; for(const k of viewNames){ v[k]=[]; for(let i=0;i<n;i++) v[k].push([]); }
+  const p=[]; for(let i=0;i<n;i++) p.push({});
+  return { name:name, loop:true, pingpong:false, views:v, pose:p };
+}
+/* The standard set every new document gets, empty. Idle is first because
+   something has to hold the drawing before it is animated - and it is what a
+   pre-animation drawing migrates into. */
+function defaultAnims(nFrames){
+  return animsFree()
+    ? STD_ANIMS.map((n,i)=>blankAnim(n, i===0?nFrames:1))
+    : [blankAnim('Main', nFrames)];
+}
+function stashAnim(){
+  const a=anims[animIdx]; if(!a) return;
+  const v={}; for(const k of viewNames) v[k]=views[k]||[];
+  a.views=v; a.pose=bonePose;
+}
+/* SYNCHRONOUS, with nothing awaited inside, for exactly the reason setViewNames'
+   key swap is: the render loop is always in flight and one frame landing on a
+   short views[view] - or a bonePose that does not reach `frame` - throws and the
+   canvas is dead until reload. */
+function applyAnim(i){
+  animIdx=Math.max(0, Math.min(anims.length-1, i|0));
+  const a=anims[animIdx] || blankAnim('Main',1);
+  const n=Math.max(1, (a.views[viewNames[0]]||[]).length || 1);
+  for(const k of Object.keys(views)) delete views[k];
+  for(const k of viewNames){ const got=a.views[k]||[]; views[k]=[];
+                             for(let j=0;j<n;j++) views[k].push(got[j]||[]); }
+  bonePose = Array.isArray(a.pose) ? a.pose : [];
+  fitBonePose(n);
+  frame=Math.max(0, Math.min(n-1, frame));
+}
+/* Every animation's views, the live one first. allShapes, usedRefKeys and
+   hasArt all walk this rather than `views` alone, or a reference used only in
+   Run is pruned out of the save and a shape skinned three animations away is
+   never re-checked against the rig. */
+function eachAnimViews(fn){
+  fn(views);
+  for(let i=0;i<anims.length;i++) if(i!==animIdx) fn(anims[i].views||{});
+}
+function uniqueAnimName(base){
+  let n=base, i=2;
+  while(anims.some(a=>String(a.name).toLowerCase()===n.toLowerCase())) n=base+' '+(i++);
+  return n;
+}
+/* One whole frame on the clipboard - every view of it plus its pose - so a frame
+   can be lifted out of Walk and dropped into Run. Deliberately outside the undo
+   stack: it is a clipboard, not a document edit. */
+let frameClip=null;
 let   tool    = 'brush';
 let   selected= null;   // the anchor shape - gestures and the sidebar read this one
 let   extra   = [];     // the rest of a multi-selection (box drag / shift-click)
@@ -2142,10 +2242,12 @@ const undoStack=[], redoStack=[];
    new scene. guardUnsaved() further down is what asks about it. */
 let dirty=false;
 function snapshot(){
-  const v={};
-  for(const n of viewNames) v[n]=views[n]||[];
-  // Every FRAME of every view, so adding, duplicating and deleting a frame are
-  // all ordinary undoable edits with nothing extra to write.
+  /* Every ANIMATION, each holding every frame of every view - so adding,
+     duplicating, reordering and deleting a frame OR an animation are all
+     ordinary undoable edits with nothing extra written. The live views/bonePose
+     are the current animation's, so they have to be written back first. The
+     empty standard animations cost almost nothing to stringify. */
+  stashAnim();
   // refLib is NOT in here: a load clears the stacks, so the view names cannot
   // change under a snapshot, and an entry orphaned by undoing an import is
   // inert. That is also why an Update keys a NEW refLib entry and repoints the
@@ -2155,18 +2257,22 @@ function snapshot(){
      document stringify, and carrying all three of rig/bind/pose is what makes
      every bone edit an ordinary undoable one with nothing extra written -
      a snapshot that forgets one of them looks fine until you redo. */
-  return JSON.stringify({views:v, view:view, frame:frame, sel:selGroup().map(g=>g.id),
-                         rig:rig, rest:restPose, pose:bonePose, selBone:selBone});
+  return JSON.stringify({anims:anims, animIdx:animIdx, view:view, frame:frame,
+                         sel:selGroup().map(g=>g.id),
+                         rig:rig, rest:restPose, selBone:selBone});
 }
 function restore(str){
   const snap=JSON.parse(str);
-  for(const n of viewNames) views[n]=snap.views[n]||[[]];
-  frame=Math.max(0,Math.min(frameCount()-1, snap.frame||0));
-  /* Before setView, which clears selBone - and the pose is clamped to the frame
-     count the views above have just decided, so it can never come back short. */
-  rig=snap.rig||[]; restPose=snap.rest||{}; bonePose=snap.pose||[];
+  /* The rig FIRST: applyAnim runs fitBonePose, which backfills a delta for every
+     bone, and it is also what clamps the pose to the frame count the animation
+     it is loading has decided. */
+  rig=snap.rig||[]; restPose=snap.rest||{};
   for(const n of viewNames) if(!restPose[n]) restPose[n]={};
-  fitBonePose(frameCount()); bumpBind();
+  anims = (Array.isArray(snap.anims) && snap.anims.length) ? snap.anims : defaultAnims(1);
+  animIdx=0;
+  frame=Math.max(0, snap.frame||0);
+  applyAnim(Math.max(0, Math.min(anims.length-1, snap.animIdx|0)));
+  bumpBind();
   const wantBone=snap.selBone;
   setView(snap.view);
   syncFrames();
@@ -3436,9 +3542,11 @@ function boneSubtree(id){
 /* Every shape in the document, across every view and every frame - bones are
    document-wide, so pruning one has to reach all of them. cur() is no use here:
    it returns a fresh [] on a miss and the loop would silently do nothing. */
+/* Every shape in the DOCUMENT - every animation, not just the one on screen. */
 function allShapes(){
   const out=[];
-  for(const v of viewNames) for(const fr of (views[v]||[])) for(const s of (fr||[])) out.push(s);
+  eachAnimViews(vs=>{ for(const v of Object.keys(vs)) for(const fr of (vs[v]||[]))
+                        for(const s of (fr||[])) out.push(s); });
   return out;
 }
 function pruneSkin(deadIds){
@@ -4769,6 +4877,10 @@ function setViewNames(kind, nFrames){
   restPose=nr;
   bonePose=[]; fitBonePose(n); bumpBind();
   selBone=null;
+  /* ...and the animation list, in the same synchronous breath. The views built
+     above ARE the first animation's, so stash rather than apply: applying would
+     throw away the frames the caller just asked for. */
+  anims=defaultAnims(n); animIdx=0; stashAnim();
 }
 
 /* The frame name shown on a chip: a sheet's frames are the expressions a game
@@ -4819,15 +4931,31 @@ const stepFrame = d => {
 /* Playback only moves the index. It must NOT go through setFrame: clearing the
    selection and rebuilding the sidebar twelve times a second is both wasteful
    and visibly destructive. */
+/* Loop and ping-pong are the animation's own two flags. Off/off runs once and
+   stops on the last frame; loop alone wraps; ping-pong alone runs out and back
+   and stops on the first; the two together bounce for ever. */
 function frameTick(){
-  const n=frameCount();
-  frame=(frame+1)%n;
+  const a=curAnim(), n=frameCount();
+  if(n<2){ pauseAnim(); return; }
+  if(a.pingpong){
+    let f=frame+playDir;
+    if(f>n-1){ playDir=-1; f=n-2; }
+    else if(f<0){
+      if(!a.loop){ pauseAnim(); return; }
+      playDir=1; f=1;
+    }
+    frame=f;
+  }else{
+    let f=frame+1;
+    if(f>n-1){ if(!a.loop){ pauseAnim(); return; } f=0; }
+    frame=f;
+  }
   syncFrames();
 }
 function playAnim(){
   if(playing) return;
   if(frameCount()<2) return;
-  playing=true; clearSel();
+  playing=true; playDir=1; clearSel();
   playTimer=setInterval(frameTick, Math.round(1000/FPS));
   syncFrames(); syncPalette();
 }
@@ -4839,6 +4967,7 @@ function pauseAnim(){
 const togglePlay = () => playing ? pauseAnim() : playAnim();
 function stopAnim(){
   pauseAnim();
+  playDir=1;
   setFrame(0);
 }
 
@@ -4872,18 +5001,49 @@ function delFrame(i){
   bonePose.splice(i,1); rigRev++;
   setFrame(Math.min(i, frameCount()-1)); render();
 }
-/* Copy this view's current frame onto its neighbour. Same Replace / Add / Cancel
-   question the view copy asks, and the same clone-with-fresh-ids rule.
-
-   Nothing here has to know about bones: the shapes are stored AT REST, so a
-   clone simply takes the destination frame's pose when it is drawn. Baking the
-   pose into the shapes would have needed a re-bake here, and getting it wrong
-   would have shown up as the copied art lurching on the next bone drag. */
-function copyFrameTo(mode,dst){
+/* The chip's x is a 12px target sitting on the frame you are working in, so it
+   asks first - it was far too easy to lose a frame to a mis-aimed click. */
+function askDelFrame(i){
+  if(framesLocked() || frameCount()<2) return;
+  const cnt=viewNames.reduce((t,v)=>t+(((views[v]||[])[i]||[]).length),0);
+  openModal({
+    title:'Delete frame '+frameLabel(i),
+    body:(cnt ? 'It holds '+cnt+' shape'+(cnt===1?'':'s')+'.' : 'It is empty.')+
+         ' This can be undone.',
+    buttons:[{label:'Delete',primary:true,danger:true,onClick:()=>delFrame(i)},
+             {label:'Cancel'}]});
+}
+/* Drag and drop on the chips. Every view moves together and so does the pose -
+   a frame is one moment across the whole document, and views[v][f] lining up is
+   the invariant the render loop reads. */
+let fdragFrom=null;
+function moveFrame(from,to){
+  const n=frameCount();
+  if(framesLocked() || from===to || from<0 || to<0 || from>=n || to>=n) return;
   pushUndo();
-  const clones=reidClone(selected ? selGroup() : cur());
-  if(mode==='replace') views[view][dst]=clones; else views[view][dst].push(...clones);
-  setFrame(dst); render();
+  for(const v of viewNames){ const a=views[v]; a.splice(to,0,a.splice(from,1)[0]); }
+  bonePose.splice(to,0,bonePose.splice(from,1)[0]); rigRev++;
+  clearSel(); gRot=0; gRotKey='';
+  frame=to;                       // the frame you dragged is the one you keep
+  syncFrames(); syncPalette(); render();
+}
+/* Copy / Paste a whole frame. This is what replaced Copy Left and Copy Right:
+   the clipboard survives an animation switch, so it is also how a frame gets
+   from Walk into Run. Paste INSERTS after the current frame rather than
+   overwriting it - nothing is lost to a mis-click. */
+function copyFrame(){
+  const v={};
+  for(const k of viewNames) v[k]=JSON.parse(JSON.stringify((views[k]||[])[frame]||[]));
+  frameClip={ views:v, pose:clonePose(poseAt(frame)) };
+  syncFrames();
+}
+function pasteFrame(){
+  if(!frameClip || framesLocked()) return;
+  pushUndo();
+  // reidClone, so a frame pasted twice does not hand two shapes the same id
+  for(const k of viewNames) views[k].splice(frame+1,0, reidClone(frameClip.views[k]||[]));
+  bonePose.splice(frame+1,0, clonePose(frameClip.pose||{})); rigRev++;
+  setFrame(frame+1); render();
 }
 /* The keys are named in one place so the chips' tooltips can never drift from
    what the keyboard handler actually does. */
@@ -4905,6 +5065,30 @@ function syncFrames(){
   const owner=document.getElementById('frameOwner');
   owner.classList.toggle('hidden',!rt);
   owner.textContent = rt ? (rt.s.ref.title||'Untitled') : '';
+
+  /* The animation row lists the DOCUMENT's animations, so a bar borrowed by a
+     selected eye or mouth object has nothing to do with it, and a fixed-frame
+     kind holds exactly one. */
+  const arow=document.getElementById('animRow');
+  const showAnims = !rt && animsFree();
+  arow.classList.toggle('hidden', !showAnims);
+  if(showAnims){
+    const sel=document.getElementById('animSel');
+    sel.textContent='';
+    anims.forEach((a,i)=>{
+      const o=document.createElement('option');
+      o.value=String(i);
+      // the live one's frames are in `views`, everyone else's in their record
+      const vs = i===animIdx ? views : (a.views||{});
+      const art = viewNames.some(v=>(vs[v]||[]).some(f=>f&&f.length));
+      o.textContent = a.name + (art?'':' · empty');
+      sel.appendChild(o);
+    });
+    sel.value=String(animIdx);
+    document.getElementById('animLoop').checked=!!curAnim().loop;
+    document.getElementById('animPing').checked=!!curAnim().pingpong;
+    document.getElementById('btnAnimDel').disabled=anims.length<2;
+  }
   box.textContent='';
   for(let i=0;i<n;i++){
     const b=document.createElement('button');
@@ -4927,8 +5111,30 @@ function syncFrames(){
     if(free && n>1){
       const x=document.createElement('span');
       x.className='fdel'; x.textContent='x'; x.title='Delete this frame';
-      x.addEventListener('click',e=>{ e.stopPropagation(); pauseAnim(); delFrame(i); });
+      x.addEventListener('click',e=>{ e.stopPropagation(); pauseAnim(); askDelFrame(i); });
       b.appendChild(x);
+    }
+    if(free){
+      b.draggable=true;
+      b.addEventListener('dragstart',e=>{
+        fdragFrom=i; b.classList.add('dragging');
+        e.dataTransfer.effectAllowed='move';
+        try{ e.dataTransfer.setData('text/plain',String(i)); }catch(_){}
+      });
+      b.addEventListener('dragend',()=>{
+        fdragFrom=null; b.classList.remove('dragging');
+        box.querySelectorAll('.fchip').forEach(c=>c.classList.remove('drop'));
+      });
+      b.addEventListener('dragover',e=>{
+        if(fdragFrom==null || fdragFrom===i) return;
+        e.preventDefault(); e.dataTransfer.dropEffect='move'; b.classList.add('drop');
+      });
+      b.addEventListener('dragleave',()=>b.classList.remove('drop'));
+      b.addEventListener('drop',e=>{
+        e.preventDefault(); b.classList.remove('drop');
+        const from=fdragFrom; fdragFrom=null;
+        if(from!=null && from!==i){ pauseAnim(); moveFrame(from,i); }
+      });
     }
     box.appendChild(b);
   }
@@ -4950,26 +5156,13 @@ function syncFrames(){
   play.disabled = dn<2 || !!rt;
   document.getElementById('btnStop').disabled = dn<2 || !!rt;
   document.getElementById('btnFrameDup').classList.toggle('hidden', !free);
-  document.getElementById('btnFrameLeft') .disabled = !!rt || frame<=0;
-  document.getElementById('btnFrameRight').disabled = !!rt || frame>=dn-1;
-  document.getElementById('btnFrameLeft') .title = !rt && frame>0    ? 'Copy onto frame '+frameLabel(frame-1) : '';
-  document.getElementById('btnFrameRight').title = !rt && frame<dn-1 ? 'Copy onto frame '+frameLabel(frame+1) : '';
+  const cp=document.getElementById('btnFrameCopy'), pa=document.getElementById('btnFramePaste');
+  cp.disabled = !!rt;
+  cp.title = rt ? '' : 'Copy this whole frame';
+  pa.disabled = !!rt || !free || !frameClip;
+  pa.title = frameClip ? 'Paste the copied frame after this one' : 'Nothing copied yet';
 }
 
-function doCopyFrameTo(dst){
-  if(dst==null || dst<0 || dst>=frameCount()) return;
-  const src=selected ? selGroup() : cur();
-  if(!src.length) return;
-  if((views[view][dst]||[]).length){
-    openModal({
-      title:'Copy to frame '+frameLabel(dst),
-      body:'Frame '+frameLabel(dst)+' already has '+views[view][dst].length+
-           ' shape'+(views[view][dst].length===1?'':'s')+'.',
-      buttons:[{label:'Replace',primary:true,onClick:()=>copyFrameTo('replace',dst)},
-               {label:'Add',                onClick:()=>copyFrameTo('add',dst)},
-               {label:'Cancel'}]});
-  }else copyFrameTo('replace',dst);
-}
 /* Delegated - the buttons are rebuilt whenever the document kind changes, so
    listeners bound to the buttons themselves would not survive. */
 document.getElementById('viewSeg').addEventListener('click',e=>{
@@ -4979,11 +5172,105 @@ document.getElementById('viewSeg').addEventListener('click',e=>{
 
 document.getElementById('onion').addEventListener('change',e=>onionOn=e.target.checked);
 document.getElementById('animOnion').addEventListener('change',e=>onionFrame=e.target.checked);
-document.getElementById('btnFrameLeft') .addEventListener('click',()=>doCopyFrameTo(frame-1));
-document.getElementById('btnFrameRight').addEventListener('click',()=>doCopyFrameTo(frame+1));
+document.getElementById('btnFrameCopy') .addEventListener('click',copyFrame);
+document.getElementById('btnFramePaste').addEventListener('click',()=>{ pauseAnim(); pasteFrame(); });
 document.getElementById('btnFrameDup')  .addEventListener('click',dupFrame);
 document.getElementById('btnPlay')      .addEventListener('click',togglePlay);
 document.getElementById('btnStop')      .addEventListener('click',()=>{ stopAnim(); render(); });
+
+/* ------------------------------------------------- the animations themselves
+   Switching one is stash-then-apply and nothing else: `views` and `bonePose`
+   ARE the current animation, so every tool, every gesture and the whole render
+   path carry on reading exactly what they always did. */
+function setAnim(i){
+  if(i===animIdx || i<0 || i>=anims.length){ syncFrames(); return; }
+  pauseAnim();
+  stashAnim();
+  clearSel(); gRot=0; gRotKey=''; selBone=null;
+  frame=0; playDir=1;
+  applyAnim(i);
+  syncFrames(); syncPalette(); render();
+}
+/* No two animations may share a name - a game looks one up by it. The check is
+   at commit rather than per keystroke, and a collision re-opens the field with
+   what was typed still in it rather than silently renaming behind your back. */
+function animNamePrompt(title, value, go){
+  openModal({
+    title:title,
+    input:{placeholder:'Animation name', value:value||''},
+    buttons:[{label:'OK',primary:true,onClick:v=>{
+        const nm=(v||'').trim();
+        if(!nm) return;
+        if(anims.some(a=>a.name!==value && String(a.name).toLowerCase()===nm.toLowerCase())){
+          openModal({title:'That name is taken',
+            body:'This drawing already has an animation called "'+nm+'".',
+            buttons:[{label:'Back',primary:true,onClick:()=>animNamePrompt(title,nm,go)},
+                     {label:'Cancel'}]});
+          return;
+        }
+        go(nm);
+      }},{label:'Cancel'}]});
+}
+function newAnim(){
+  if(!animsFree()) return;
+  animNamePrompt('New animation', uniqueAnimName('Animation'), nm=>{
+    pauseAnim(); pushUndo(); stashAnim();
+    anims.push(blankAnim(nm,1));
+    clearSel(); gRot=0; gRotKey=''; selBone=null; frame=0;
+    applyAnim(anims.length-1);
+    syncFrames(); syncPalette(); render();
+  });
+}
+function dupAnim(){
+  if(!animsFree()) return;
+  animNamePrompt('Duplicate animation', uniqueAnimName(curAnim().name+' copy'), nm=>{
+    pauseAnim(); pushUndo(); stashAnim();
+    const src=anims[animIdx];
+    const v={};
+    // reidClone per frame: ids are unique within a SCENE, not within an animation
+    for(const k of viewNames) v[k]=(src.views[k]||[]).map(fr=>reidClone(fr||[]));
+    anims.splice(animIdx+1,0,{ name:nm, loop:!!src.loop, pingpong:!!src.pingpong,
+                               views:v, pose:(src.pose||[]).map(clonePose) });
+    clearSel(); gRot=0; gRotKey=''; selBone=null; frame=0;
+    applyAnim(animIdx+1);
+    syncFrames(); syncPalette(); render();
+  });
+}
+function renameAnim(){
+  if(!animsFree()) return;
+  const old=curAnim().name;
+  animNamePrompt('Rename animation', old, nm=>{
+    pushUndo(); curAnim().name=nm; syncFrames(); render();
+  });
+}
+function delAnim(){
+  if(!animsFree() || anims.length<2) return;
+  const a=curAnim();
+  const nf=Math.max(1,(views[viewNames[0]]||[]).length);
+  const cnt=viewNames.reduce((t,v)=>t+(views[v]||[]).reduce((u,f)=>u+((f||[]).length),0),0);
+  openModal({
+    title:'Delete "'+a.name+'"',
+    body:(cnt ? 'It holds '+cnt+' shape'+(cnt===1?'':'s')+' across '+nf+
+                ' frame'+(nf===1?'':'s')+'.' : 'It is empty.')+' This can be undone.',
+    buttons:[{label:'Delete',primary:true,danger:true,onClick:()=>{
+        pauseAnim(); pushUndo(); stashAnim();
+        anims.splice(animIdx,1);
+        clearSel(); gRot=0; gRotKey=''; selBone=null; frame=0;
+        applyAnim(Math.min(animIdx, anims.length-1));
+        syncFrames(); syncPalette(); render();
+      }},{label:'Cancel'}]});
+}
+document.getElementById('animSel').addEventListener('change',e=>setAnim(parseInt(e.target.value,10)||0));
+/* Both flags are the animation's own data, so they are ordinary undoable edits
+   and snapshot() already carries them - it stringifies the whole list. */
+document.getElementById('animLoop').addEventListener('change',e=>{
+  pushUndo(); curAnim().loop=e.target.checked; });
+document.getElementById('animPing').addEventListener('change',e=>{
+  pushUndo(); curAnim().pingpong=e.target.checked; playDir=1; });
+document.getElementById('btnAnimNew').addEventListener('click',newAnim);
+document.getElementById('btnAnimDup').addEventListener('click',dupAnim);
+document.getElementById('btnAnimRen').addEventListener('click',renameAnim);
+document.getElementById('btnAnimDel').addEventListener('click',delAnim);
 
 /* ------------------------------------------ copy this view onto another one
    Copying between VIEWS always stays on the current frame - front and back of
@@ -5407,6 +5694,13 @@ function exportName(){
     .replace(/[\\/:*?"<>|]+/g,'').replace(/\s+/g,' ').trim() || 'drawthing';
   return base;
 }
+/* A drawing holds many animations and they all export to the same folder, so the
+   name says which. Only when there is more than one to tell apart. */
+function animSlug(){
+  if(!animsFree() || anims.length<2) return '';
+  const n=String(curAnim().name).replace(/[\\/:*?"<>|]+/g,'').replace(/\s+/g,'_').trim();
+  return n ? '-'+n : '';
+}
 function saveBlob(href, name, revoke){
   const a=document.createElement('a');
   a.href=href; a.download=name; a.click();
@@ -5419,7 +5713,7 @@ function exportPNG(scope){
                                             : {scale:EXPORT_SCALE});
   if(!url){ openModal({title:'Nothing to export', body:'There are no shapes here to write out.',
                        buttons:[{label:'OK',primary:true}]}); return; }
-  let n=exportName();
+  let n=exportName()+animSlug();
   if(viewNames.length>1) n+='-'+view;
   if(frameCount()>1)     n+='-'+frame;
   saveBlob(url, n+'.png');
@@ -5453,7 +5747,7 @@ function exportGIF(scope){
   const {datas, w:gw, h:gh}=renderFramesToImageData(view, box, scale, null);
   const bytes=encodeGIF(datas, gw, gh, Math.max(2,Math.round(100/FPS)));
   const url=URL.createObjectURL(new Blob([bytes],{type:'image/gif'}));
-  saveBlob(url, exportName()+(viewNames.length>1?'-'+view:'')+'.gif', true);
+  saveBlob(url, exportName()+animSlug()+(viewNames.length>1?'-'+view:'')+'.gif', true);
 }
 
 function openExportModal(){
@@ -5527,12 +5821,11 @@ document.getElementById('btnExport').addEventListener('click',openExportModal);
    while the fill still closes with a straight chord; a colour of "none" means
    do not render that part at all. */
 const SCENE_FORMAT  = 'charactersmith.scene';
-const SCENE_VERSION = 5;   // v5 made the rest per VIEW and the pose a delta
+const SCENE_VERSION = 6;   // v6 made a document hold MANY named animations
 
 function sceneToJSON(){
+  stashAnim();                              // the live arrays are the current one's
   const r = cv.getBoundingClientRect();
-  const vs={};
-  for(const n of viewNames) vs[n]=JSON.parse(JSON.stringify(views[n]||[]));
   // Only the references the document still uses: an import that has since been
   // undone or deleted leaves an entry behind in refLib, and there is no reason
   // to carry it into the row. Transitive, because an item can hold references
@@ -5547,8 +5840,12 @@ function sceneToJSON(){
     canvas: { width:Math.round(r.width), height:Math.round(r.height) },
     viewOrder: viewNames.slice(),
     frameNames: (DOC_KINDS[docKind].frameNames||null),
-    frameCount: frameCount(),
-    views: vs,                                // views[key][frame]; array order IS draw order
+    /* MANY animations, each with its own frames and its own pose. A name is how
+       a game asks for one, so they are unique; loop and pingpong are how it
+       plays. animations[0] is the resting one - it is what an importer takes
+       when it stamps this drawing into another. */
+    animations: animsToJSON(),
+    activeAnim: animIdx,
     refs: refs,                               // imported drawings, one entry each
     /* The skeleton. `rig` is the hierarchy alone, `rest` is ONE REST SKELETON
        PER VIEW - which is what the skin weights are measured against and where
@@ -5564,10 +5861,7 @@ function sceneToJSON(){
        just saved, which is exactly the round trip everything here is checked by.
        It is also the kinder shape for a game to read. */
     bones: { rig:  JSON.parse(JSON.stringify(rig)),
-             rest: JSON.parse(JSON.stringify(restPose)),
-             pose: bonePose.map(p=>{ const q={};
-               for(const b of rig) q[b.id]=cloneDelta(p[b.id]||{drot:0,klen:1});
-               return q; }) },
+             rest: JSON.parse(JSON.stringify(restPose)) },
     render: {
       shading: shading,                       // 'hatch' | 'gradient'
       light: { from:{x:LIGHT_FROM.x,y:LIGHT_FROM.y}, to:{x:LIGHT_TO.x,y:LIGHT_TO.y},
@@ -5582,6 +5876,27 @@ function sceneToJSON(){
       brushW: brushW
     }
   };
+}
+
+/* Each animation written out with every view padded to the same frame count and
+   the pose NORMALISED - an entry for every bone of every frame, zero where there
+   is none. A delta is created lazily on the first write, so the live pose is
+   legitimately sparse and fitBonePose fills it back in on load; without the
+   normalisation a scene came back textually different from the one just saved,
+   which is exactly the round trip everything here is checked by. */
+function animsToJSON(){
+  return anims.map(a=>{
+    const vs={};
+    for(const n of viewNames) vs[n]=JSON.parse(JSON.stringify(a.views[n]||[]));
+    const nf=Math.max(1, (vs[viewNames[0]]||[]).length);
+    for(const n of viewNames){ while(vs[n].length<nf) vs[n].push([]); vs[n].length=nf; }
+    const pose=[];
+    for(let i=0;i<nf;i++){ const p=(a.pose||[])[i]||{}, q={};
+                           for(const b of rig) q[b.id]=cloneDelta(p[b.id]||{drot:0,klen:1});
+                           pose.push(q); }
+    return { name:a.name, loop:!!a.loop, pingpong:!!a.pingpong,
+             frameCount:nf, views:vs, pose:pose };
+  });
 }
 
 function migrateScene(o){
@@ -5665,6 +5980,27 @@ function migrateScene(o){
     o.bones={ rig:rg, rest:rest, pose:pose };
     o.version=5;
   }
+  if(o.version<6){
+    /* One animation became many. Everything a v5 scene held IS the first one -
+       named Idle, because that is the resting state a drawing is made in before
+       it is animated - and the standard set is appended behind it, empty. A
+       fixed-frame kind is left with its single animation: its frames are the
+       expressions a game swaps between, not a timeline. */
+    const order = o.viewOrder || Object.keys(o.views||{});
+    const vs = o.views || {};
+    const nf = Math.max(1, o.frameCount || (vs[order[0]]||[]).length || 1);
+    const free = (DOC_KINDS[o.kind]||DOC_KINDS.character).frames==='free';
+    const blank = () => { const v={}; for(const k of order) v[k]=[[]];
+                          return {views:v, pose:[{}], frameCount:1}; };
+    o.animations=[{ name: free?STD_ANIMS[0]:'Main', loop:true, pingpong:false,
+                    frameCount:nf, views:vs, pose:((o.bones||{}).pose)||[] }];
+    if(free) for(const n of STD_ANIMS.slice(1))
+      o.animations.push(Object.assign({name:n, loop:true, pingpong:false}, blank()));
+    o.activeAnim=0;
+    delete o.views; delete o.frameCount;
+    if(o.bones) delete o.bones.pose;
+    o.version=6;
+  }
   return o;
 }
 
@@ -5693,11 +6029,12 @@ function migrateRefField(rf,entry){
    included. Seeded from the shapes, then walked through each entry's own
    shapes - an item that imports an item would otherwise lose the inner one. */
 function usedRefKeys(src){
-  const vs = src || views, names = src ? Object.keys(src) : viewNames;
   const seen=new Set(), queue=[];
   const scan=list=>{ for(const s of list||[]) if(s && s.ref && !seen.has(s.ref.key)){
                        seen.add(s.ref.key); queue.push(s.ref.key); } };
-  for(const n of names) for(const fr of vs[n]||[]) scan(fr);
+  const walk=vs=>{ for(const n of Object.keys(vs||{})) for(const fr of vs[n]||[]) scan(fr); };
+  // EVERY animation, or a reference placed only in Run is pruned out of the save
+  if(src) walk(src); else eachAnimViews(walk);
   while(queue.length){
     const e=refLib.get(queue.pop());
     if(!e) continue;
@@ -5713,27 +6050,19 @@ function sceneFromJSON(raw){
      anything is assigned into them or read back out of them. A key the scene
      declares but does not carry simply comes back empty. */
   const kind = DOC_KINDS[o.kind] ? o.kind : 'character';
-  const src  = o.views || {};
-  const nF   = Math.max(1, o.frameCount || (src[(o.viewOrder||[])[0]]||[]).length || 1);
-  setViewNames(kind, nF);
-  /* Every view carries the same number of frames, so a view the scene declares
-     but does not carry - or carries short - is padded rather than left ragged;
-     views[n][frame] must never be undefined or the render loop dies. */
-  const n2 = frameCount();
-  for(const n of viewNames){
-    const got = src[n] || [];
-    views[n] = [];
-    for(let i=0;i<n2;i++) views[n].push(got[i] || []);
-  }
+  const list = (Array.isArray(o.animations) && o.animations.length) ? o.animations : null;
+  const a0   = list ? list[0] : {views:{}, pose:[]};
+  const nF   = Math.max(1, a0.frameCount || ((a0.views||{})[(o.viewOrder||[])[0]]||[]).length || 1);
+  setViewNames(kind, nF);        // ...which also seeds a default animation list
 
   refLib.clear();
   const rf = o.refs || {};
   for(const k of Object.keys(rf)) refLib.set(k, rf[k]);
 
-  /* The skeleton, before anything reads a pose. fitBonePose pads it to the
-     frame count the views above have just decided - a scene that declares fewer
-     pose frames than it has frames must not leave views[view][frame] reachable
-     with poseAt(frame) undefined. */
+  /* The skeleton BEFORE the animations: applyAnim runs fitBonePose, which
+     backfills a delta for every bone of every frame - a scene that declares
+     fewer pose frames than it has frames must not leave views[view][frame]
+     reachable with poseAt(frame) undefined. */
   const bn = o.bones || {};
   rig      = Array.isArray(bn.rig) ? bn.rig : [];
   /* One rest per view. A view the scene does not carry a rest for falls back to
@@ -5744,8 +6073,25 @@ function sceneFromJSON(raw){
   restPose = {};
   for(const n of viewNames)
     restPose[n] = rs[n] ? rs[n] : JSON.parse(JSON.stringify(rs[viewNames[0]] || {}));
-  bonePose = Array.isArray(bn.pose) ? bn.pose : [];
-  fitBonePose(frameCount());
+
+  /* Every animation, each padded so every view carries the same number of
+     frames - views[n][frame] reaching undefined kills the render loop. Names
+     are forced unique on the way in: a game asks for one by name. */
+  anims = list ? list.map((a,i)=>{
+    const av=a.views||{};
+    const nf=Math.max(1, a.frameCount || (av[viewNames[0]]||[]).length || 1);
+    const v={};
+    for(const n of viewNames){ const got=av[n]||[]; v[n]=[];
+                               for(let j=0;j<nf;j++) v[n].push(got[j]||[]); }
+    return { name:String(a.name||('Animation '+(i+1))), loop:a.loop!==false,
+             pingpong:!!a.pingpong, views:v, pose:Array.isArray(a.pose)?a.pose:[] };
+  }) : defaultAnims(nF);
+  const seenNames=new Set();
+  for(const a of anims){ let n=a.name, j=2;
+                         while(seenNames.has(n.toLowerCase())) n=a.name+' '+(j++);
+                         a.name=n; seenNames.add(n.toLowerCase()); }
+  animIdx=0; frame=0;
+  applyAnim(Math.max(0, Math.min(anims.length-1, o.activeAnim|0)));
   // bone ids are their own namespace, and need the same sweep the shape uid gets
   let mb=0; for(const b of rig) if(b.id>mb) mb=b.id;
   bid = mb+1;
@@ -5765,7 +6111,8 @@ function sceneFromJSON(raw){
      one by id, their ids came from a different scene, and the import strips
      them anyway. */
   let mx=0;
-  for(const v of viewNames) for(const fr of views[v]) for(const s of fr) if(s.id>mx) mx=s.id;
+  eachAnimViews(vs=>{ for(const v of Object.keys(vs)) for(const fr of vs[v]||[])
+                        for(const s of fr||[]) if(s.id>mx) mx=s.id; });
   uid = mx+1;
 
   const ed=o.editor||{}, rn=o.render||{};
@@ -5792,8 +6139,10 @@ function sceneFromJSON(raw){
 
 function newScene(kind){
   pauseAnim();
-  // Before setViewNames, so its pose rebuild starts from an empty skeleton.
-  rig=[]; restPose={}; bonePose=[]; bid=1; selBone=null; boneMode=false; boneTool='bdraw';
+  // Before setViewNames, so its pose rebuild - and its animation list - start
+  // from an empty skeleton.
+  rig=[]; restPose={}; bonePose=[]; anims=[]; animIdx=0; frameClip=null;
+  bid=1; selBone=null; boneMode=false; boneTool='bdraw';
   skinHideBound=false; splitCache={key:'',dx:0};
   setViewNames(kind||'character');            // empties and re-keys views, rebuilds the switch
   refLib.clear();
@@ -5930,17 +6279,33 @@ async function signOutUser(){
 function thumbnailNow(){
   // Frame 0 of the first view with anything in it: the resting pose is the face
   // of a drawing, whatever the drawing is called and however it animates.
-  for(const n of viewNames){
-    const url=renderViewToDataURL(n,{maxDim:320, frame:0});
-    if(url) return url;
-  }
-  // Nothing in frame 0 of any view - fall back to the first frame that has anything
-  for(let f=1; f<frameCount(); f++)
+  const shot=()=>{
     for(const n of viewNames){
-      const url=renderViewToDataURL(n,{maxDim:320, frame:f});
+      const url=renderViewToDataURL(n,{maxDim:320, frame:0});
       if(url) return url;
     }
-  return null;
+    // Nothing in frame 0 of any view - fall back to the first frame that has anything
+    for(let f=1; f<frameCount(); f++)
+      for(const n of viewNames){
+        const url=renderViewToDataURL(n,{maxDim:320, frame:f});
+        if(url) return url;
+      }
+    return null;
+  };
+  let url=shot();
+  if(url) return url;
+  /* The animation you happen to be standing in may be one of the empty standard
+     ones, so fall through the rest of them. Synchronous throughout - applyAnim
+     swaps the live arrays and they are put straight back, so no frame ever lands
+     in between. */
+  stashAnim();
+  const was=animIdx, wasF=frame;
+  for(let i=0;i<anims.length && !url;i++){
+    if(i===was) continue;
+    frame=0; applyAnim(i); url=shot();
+  }
+  frame=wasF; applyAnim(was); render();
+  return url;
 }
 
 async function listDrawings(){
@@ -6361,9 +6726,10 @@ function boxPts(w,h){
 function buildRefEntry(data){
   // migrateScene ONLY - sceneFromJSON would throw the editor away and load the row
   const o=migrateScene(typeof data.scene==='string'?JSON.parse(data.scene):data.scene);
-  const vOrder=(o.viewOrder||[]).filter(n=>Array.isArray((o.views||{})[n]));
+  const a0=(o.animations||[])[0] || {views:{}};
+  const vOrder=(o.viewOrder||[]).filter(n=>Array.isArray((a0.views||{})[n]));
   if(!vOrder.length) throw new Error('That drawing has no views.');
-  const frames=JSON.parse(JSON.stringify(o.views[vOrder[0]]));
+  const frames=JSON.parse(JSON.stringify(a0.views[vOrder[0]]));
 
   /* ONE shared offset for every frame - centring each frame on its own bbox
      would make them jitter against each other. The union of all the frames is
@@ -6648,7 +7014,11 @@ document.getElementById('btnGallery').addEventListener('click',()=>{
    the unsaved-work guard reads the drawing as empty and lets you walk away from
    it. The key syncChrome memoises on already re-reads this every frame. */
 function hasArt(){
-  return rig.length>0 || viewNames.some(n=>(views[n]||[]).some(f=>f && f.length));
+  if(rig.length>0) return true;
+  let any=false;
+  eachAnimViews(vs=>{ if(any) return;
+    for(const n of Object.keys(vs)) if((vs[n]||[]).some(f=>f && f.length)) any=true; });
+  return any;
 }
 function unsaved(){ return dirty && hasArt(); }
 function guardUnsaved(go){
@@ -6983,10 +7353,20 @@ function objectSceneFrom(shapes, kind){
   o.kind=kind;
   o.viewOrder=names;
   o.frameNames=(def.frameNames||null);
-  o.frameCount=nF;
-  o.views=v;
+  /* The art goes into the first animation; a free-frame child gets the rest of
+     the standard set behind it, empty, exactly as a new document would. */
+  const pose0=[]; for(let i=0;i<nF;i++) pose0.push({});
+  o.animations=[{ name:(def.frames==='free'?STD_ANIMS[0]:'Main'), loop:true,
+                  pingpong:false, frameCount:nF, views:v, pose:pose0 }];
+  if(def.frames==='free') for(const nm of STD_ANIMS.slice(1)){
+    const vv={}; for(const k of names) vv[k]=[[]];
+    o.animations.push({name:nm, loop:true, pingpong:false, frameCount:1,
+                       views:vv, pose:[{}]});
+  }
+  o.activeAnim=0;
+  delete o.views; delete o.frameCount;
   o.refs=refs;
-  o.bones={ rig:[], rest:{}, pose:[] };     // an object starts unrigged
+  o.bones={ rig:[], rest:{} };              // an object starts unrigged
   o.editor.activeView=names[0];
   o.editor.activeFrame=0;
   return o;
