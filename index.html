@@ -432,7 +432,7 @@
   <div id="modeWrap">
     <button class="tool" id="btnMode">
       <svg id="modeIcon" viewBox="0 0 24 24"></svg>
-      <span class="kbd">5</span><span class="tip" id="modeTip">Mode</span>
+      <span class="tip" id="modeTip">Mode</span>
     </button>
     <div id="modeMenu" class="hidden"></div>
   </div>
@@ -448,7 +448,7 @@
 
   <button class="tool" data-tool="smear">
     <svg viewBox="0 0 24 24"><path d="M4 17c3.2 0 4.2-3.4 7-3.4S16.6 17 20 17"/><path d="M6 12.2c2.4 0 3.2-2.4 5.2-2.4s2.9 2.4 5 2.4"/><path d="M8.5 7.6c1.6 0 2.1-1.6 3.5-1.6s1.9 1.6 3.4 1.6"/></svg>
-    <span class="kbd">2</span><span class="tip">The Smear</span>
+    <span class="kbd">2</span><span class="tip">The Nudge</span>
   </button>
 
   <button class="tool" data-tool="eraser">
@@ -458,7 +458,7 @@
 
   <button class="tool" data-tool="hand">
     <svg viewBox="0 0 24 24"><path d="M9 11V5.6a1.4 1.4 0 0 1 2.8 0V11"/><path d="M11.8 10.6V4.4a1.4 1.4 0 0 1 2.8 0v6.2"/><path d="M14.6 11V6.6a1.4 1.4 0 0 1 2.8 0V14"/><path d="M9 11V9.2a1.4 1.4 0 0 0-2.8 0v6.1c0 3.2 2.4 5.7 5.7 5.7h1.2c3 0 4.3-2 4.3-5"/></svg>
-    <span class="kbd">4</span><span class="tip">Hand of Judgement</span>
+    <span class="kbd">4</span><span class="tip">The Hand</span>
   </button>
 
   <!-- Bone mode REPLACES the drawing tools, so its own four sit in the same
@@ -585,6 +585,34 @@
     <div id="poses"></div>
   </div>
 
+  <div class="divider"></div>
+
+  <h3>Colour Palette</h3>
+  <div class="swatches" id="swatches"></div>
+
+  <div class="colhead">
+    <h3 id="curColHead">Colours</h3>
+    <h3 class="right hidden" id="selColHead">Selected</h3>
+  </div>
+  <div class="slotcols">
+    <div class="slots" id="slots">
+      <div class="slot" data-slot="outline" data-target="current"><div class="chip"></div><div><div class="lbl">Outline</div><div class="hex"></div></div></div>
+      <div class="slot" data-slot="fill" data-target="current"><div class="chip"></div><div><div class="lbl">Fill</div><div class="hex"></div></div></div>
+      <div class="slot" data-slot="shadow" data-target="current"><div class="chip"></div><div><div class="lbl">Shadow</div><div class="hex"></div></div></div>
+    </div>
+    <div class="slots hidden" id="selSlots">
+      <div class="slot" data-slot="outline" data-target="sel"><div class="chip"></div><div><div class="lbl">Outline</div><div class="hex"></div></div></div>
+      <div class="slot" data-slot="fill" data-target="sel"><div class="chip"></div><div><div class="lbl">Fill</div><div class="hex"></div></div></div>
+      <div class="slot" data-slot="shadow" data-target="sel"><div class="chip"></div><div><div class="lbl">Shadow</div><div class="hex"></div></div></div>
+    </div>
+  </div>
+  <!-- The selection's colours become the default the next shape is drawn with.
+       It is the one thing dragging a slot across used to be for, and the left
+       column is not on screen to drag to while something is selected. -->
+  <div class="prow hidden" id="copyColRow">
+    <button class="pbtn" id="copyColBtn"><svg viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a2 2 0 0 1 2-2h8"/></svg>Copy colours</button>
+  </div>
+
   <div class="divider" id="selDiv"></div>
 
   <div class="psec" id="selSec">
@@ -607,28 +635,6 @@
         <button class="pbtn" data-mkobj="mouths">New Mouth</button>
         <button class="pbtn" data-mkobj="item">New Item</button>
       </div>
-    </div>
-  </div>
-
-  <div class="divider"></div>
-
-  <h3>Colour Palette</h3>
-  <div class="swatches" id="swatches"></div>
-
-  <div class="colhead">
-    <h3>Colours</h3>
-    <h3 class="right hidden" id="selColHead">Selected</h3>
-  </div>
-  <div class="slotcols">
-    <div class="slots" id="slots">
-      <div class="slot" data-slot="outline" data-target="current"><div class="chip"></div><div><div class="lbl">Outline</div><div class="hex"></div></div></div>
-      <div class="slot" data-slot="fill" data-target="current"><div class="chip"></div><div><div class="lbl">Fill</div><div class="hex"></div></div></div>
-      <div class="slot" data-slot="shadow" data-target="current"><div class="chip"></div><div><div class="lbl">Shadow</div><div class="hex"></div></div></div>
-    </div>
-    <div class="slots hidden" id="selSlots">
-      <div class="slot" data-slot="outline" data-target="sel"><div class="chip"></div><div><div class="lbl">Outline</div><div class="hex"></div></div></div>
-      <div class="slot" data-slot="fill" data-target="sel"><div class="chip"></div><div><div class="lbl">Fill</div><div class="hex"></div></div></div>
-      <div class="slot" data-slot="shadow" data-target="sel"><div class="chip"></div><div><div class="lbl">Shadow</div><div class="hex"></div></div></div>
     </div>
   </div>
 
@@ -818,7 +824,7 @@ const stage= document.getElementById('stage');
    It is NOT the scene format version (SCENE_VERSION) - that one is data and is
    what migrateScene gates on. Bump the minor part for a feature, the patch part
    for a fix, and bump it in the same commit as the change. */
-const APP_VERSION = '1.1.0';
+const APP_VERSION = '1.2.2';
 
 /* ---------------------------------------------------------------- state */
 /* A document is one of four kinds. A character and an item have a front and a
@@ -873,6 +879,25 @@ let   uid     = 1;
 // A slot holding NONE means "do not render this part at all".
 const NONE = 'none';
 const paint = c => c===NONE ? 'rgba(0,0,0,0)' : c;   // for gradient stops
+
+/* An outline the colour of the paper is invisible for the whole time it is
+   being drawn, which is exactly when you need to see it. PAPER_RGB is the one
+   the canvas is filled with; `lowContrast` is what the live stroke tests to
+   decide whether to invert itself instead of using the colour honestly. */
+const PAPER_RGB = [0xF7,0xF4,0xEE];
+function hexRGB(c){
+  if(typeof c!=='string') return null;
+  let h=c.trim().replace('#','');
+  if(h.length===3) h=h[0]+h[0]+h[1]+h[1]+h[2]+h[2];
+  if(!/^[0-9a-fA-F]{6}$/.test(h)) return null;
+  return [parseInt(h.slice(0,2),16),parseInt(h.slice(2,4),16),parseInt(h.slice(4,6),16)];
+}
+function lowContrast(c){
+  if(c===NONE) return true;
+  const a=hexRGB(c);
+  if(!a) return false;
+  return Math.abs(a[0]-PAPER_RGB[0])+Math.abs(a[1]-PAPER_RGB[1])+Math.abs(a[2]-PAPER_RGB[2]) < 96;
+}
 
 // persistent colour choice - new shapes inherit this
 let current = { outline:'#2E2A28', fill:'#F7C59F', shadow:'#B9713F' };
@@ -1421,7 +1446,7 @@ function drawShape(s,opts){
   ctx.restore();
 }
 
-/* selection chrome for the Hand of Judgement */
+/* selection chrome for the Hand */
 function rawCorners(s){
   const b=bbox(s.pts);
   return [{x:b.x0,y:b.y0},{x:b.x1,y:b.y0},{x:b.x1,y:b.y1},{x:b.x0,y:b.y1}];
@@ -1661,15 +1686,43 @@ function drawFrame(){
 
   if(drawing && drawing.pts.length>1){       // live brush stroke
     ctx.save();
-    ctx.lineJoin='round'; ctx.lineCap='round';
-    ctx.strokeStyle = current.outline===NONE ? 'rgba(60,50,40,.5)' : current.outline;
-    ctx.lineWidth=4;
-    ctx.beginPath(); ctx.moveTo(drawing.pts[0].x,drawing.pts[0].y);
-    for(let i=1;i<drawing.pts.length;i++) ctx.lineTo(drawing.pts[i].x,drawing.pts[i].y);
-    ctx.stroke();
     const first=drawing.pts[0], last=drawing.pts[drawing.pts.length-1];
     const snapAt = closeThresholdFor(drawing.len);
     const willClose = drawing.len>MIN_RUN && dist(first,last)<snapAt;
+
+    /* Preview of the shape it is about to become - the same fill and the same
+       shading, off a throwaway shape run through the ordinary drawShape, so
+       there is one painter and not two. The OUTLINE is left off it: the guide
+       line below is the honest one, drawn on the raw points rather than on
+       finishBrush's simplified ones. The points are raw for the same reason -
+       the simplification pass is not worth a run per frame at preview size. */
+    if(drawing.pts.length>3){
+      const pb=bbox(drawing.pts);
+      if(pb.w>=5 || pb.h>=5){
+        ctx.globalAlpha=0.62;
+        drawShape({ id:-1, pts:drawing.pts.map(p=>({x:p.x-pb.cx, y:p.y-pb.cy})),
+                    x:pb.cx, y:pb.cy, rot:0, sx:1, sy:1, lw:brushW, closed:willClose,
+                    colors:{outline:NONE, fill:current.fill, shadow:current.shadow} });
+        ctx.globalAlpha=1;
+      }
+    }
+
+    ctx.lineJoin='round'; ctx.lineCap='round';
+    /* An outline the colour of the paper cannot be seen while it is being drawn,
+       and neither can one the colour of the fill it is being drawn across - and
+       one stroke crosses both. `difference` against white INVERTS whatever is
+       underneath, so the guide line reads dark over paper and light over a dark
+       fill, continuously, along the one line. Only when the colour is too close
+       to the paper to see: an ordinary outline is shown as itself. */
+    const dim = lowContrast(current.outline);
+    if(dim){ ctx.globalCompositeOperation='difference'; ctx.strokeStyle='#ffffff'; }
+    else   { ctx.strokeStyle=current.outline; }
+    ctx.lineWidth=Math.max(2,brushW);
+    ctx.beginPath(); ctx.moveTo(drawing.pts[0].x,drawing.pts[0].y);
+    for(let i=1;i<drawing.pts.length;i++) ctx.lineTo(drawing.pts[i].x,drawing.pts[i].y);
+    ctx.stroke();
+    ctx.globalCompositeOperation='source-over';
+    ctx.strokeStyle = dim ? 'rgba(60,50,40,.55)' : current.outline;
 
     // chord preview: it is where the fill will cut across, and it only gets an
     // outline if you come back within snapping range of where you started
@@ -2174,6 +2227,14 @@ function pos(e){
 }
 
 cv.addEventListener('pointerdown',e=>{
+  /* A sidebar text field that is still focused has to be COMMITTED before
+     anything else runs. The canvas is not focusable, so pressing it does not
+     blur the field on its own - and this handler calls syncPalette -> syncMeta,
+     which used to write the stored name straight back over what had just been
+     typed. Blurring first fires `change`, which is the commit. */
+  const af=document.activeElement;
+  if(af && (af.id==='metaTitle' || af.id==='metaTags')){ commitMeta(); af.blur(); }
+  else if(af && af.tagName==='INPUT' && af.closest('#palette')) af.blur();
   // While it is playing the canvas is a viewer, not an editor: the frame under
   // the cursor changes twelve times a second, so any gesture would land on
   // whichever frame happened to be up when you let go.
@@ -2234,7 +2295,7 @@ cv.addEventListener('pointerdown',e=>{
     return;
   }
 
-  /* ---- Hand of Judgement ---- */
+  /* ---- the Hand ---- */
   // Depth arrows first: they sit clear of every box, so nothing else can want them.
   {
     const g0=selGroup();
@@ -2459,7 +2520,9 @@ function finishMarquee(){
   const hit=cur().filter(sh=>{
     if(skinHidden(sh)) return false;              // a shape you cannot see is not selectable
     const b=bbox(worldPts(sh));
-    return b.x1>=x0 && b.x0<=x1 && b.y1>=y0 && b.y0<=y1;
+    // FULLY inside the box, not merely overlapping it: a lasso that grabbed
+    // whatever it clipped picked up half a crowded frame.
+    return b.x0>=x0 && b.x1<=x1 && b.y0>=y0 && b.y1<=y1;
   });
   if(!marquee.add) clearSel();
   for(const sh of hit) if(!inSel(sh)){ if(selected) extra.push(sh); else selected=sh; }
@@ -2992,7 +3055,18 @@ function applyColor(which,hex,target){
   syncPalette();
 }
 
-const TOOL_NAMES={brush:'Brush', smear:'Smear', eraser:'Eraser', hand:'Hand of Judgement'};
+/* Push the selection's colours out as the default the next shape will use. A
+   reference has none of its own - its slots all read NONE - so the first shape
+   in the selection that can actually hold a colour is the one that is read. */
+document.getElementById('copyColBtn').addEventListener('click',()=>{
+  const s=selGroup().find(editable);
+  if(!s) return;
+  pushUndo();
+  current.outline=s.colors.outline; current.fill=s.colors.fill; current.shadow=s.colors.shadow;
+  syncPalette();
+});
+
+const TOOL_NAMES={brush:'Brush', smear:'Nudge', eraser:'Eraser', hand:'Hand'};
 const TOOL_PANELS={brush:'optBrush', smear:'optSmear', eraser:'optEraser', hand:'optHand'};
 /* The bone tools are deliberately NOT values of `tool`: syncPalette does
    getElementById(TOOL_PANELS[tool]) and throws on anything not in that map. */
@@ -3059,7 +3133,8 @@ function buildModeMenu(){
     '</svg><span>'+esc(m.label)+'</span></button>').join('');
 }
 /* Called from syncPalette, so the button follows the mode however it was
-   changed - the menu, the 5 key, or a load that dropped bone mode. */
+   changed - the menu, or a load that dropped bone mode. The mode has no key of its own:
+   it is somewhere you go and stay, not something stepped through the way 1-4 are. */
 function syncModeBtn(){
   const on = canRig();
   if(!on) modeMenuOpen=false;
@@ -3179,6 +3254,15 @@ function syncPalette(){
   document.getElementById('selDiv').classList.toggle('hidden',!has);
   document.getElementById('selSlots').classList.toggle('hidden',!has);
   document.getElementById('selColHead').classList.toggle('hidden',!has);
+  /* The default colours are for the NEXT shape, which is not what you are
+     looking at while one is selected - so the left column goes away and the
+     selection's own is the only one on screen. `Copy colours` is what is left
+     of dragging a slot from one column to the other. */
+  document.getElementById('slots').classList.toggle('hidden',has);
+  document.getElementById('curColHead').classList.toggle('hidden',has);
+  document.getElementById('selColHead').classList.toggle('right',!has);
+  document.getElementById('copyColRow').classList.toggle('hidden',!has);
+  document.getElementById('copyColBtn').disabled = !selGroup().some(editable);
   // Nothing in the selection can take a colour: the column stays put but goes inert.
   document.getElementById('selSlots').classList.toggle('locked', has && !grp.some(editable));
 
@@ -6507,6 +6591,10 @@ function metaTarget(){
 }
 function syncMeta(){
   const t=metaTarget();
+  /* Never write over a field the user is standing in - a repaint mid-edit would
+     silently throw away whatever has been typed but not yet committed. */
+  const af=document.activeElement;
+  const put=(el,v)=>{ if(el!==af) el.value=v; };
   const title=document.getElementById('metaTitle');
   const tags =document.getElementById('metaTags');
   const pub  =document.getElementById('metaPub');
@@ -6516,8 +6604,8 @@ function syncMeta(){
   if(t.ref){
     const e=t.entry, mine=canEditRef(t.shape);
     head.textContent='Object';
-    title.value=e.title||'';
-    tags.value=(e.tags||[]).join(' ');
+    put(title, e.title||'');
+    put(tags, (e.tags||[]).join(' '));
     pub.checked=!!e.published;
     title.disabled=tags.disabled=pub.disabled=!mine;
     facts.textContent=
@@ -6527,8 +6615,8 @@ function syncMeta(){
       (mine?'':' - not yours to edit');
   }else{
     head.textContent='Drawing';
-    title.value=currentDrawingTitle||'';
-    tags.value=(currentDrawingTags||[]).join(' ');
+    put(title, currentDrawingTitle||'');
+    put(tags, (currentDrawingTags||[]).join(' '));
     pub.checked=!!currentDrawingPublished;
     title.disabled=tags.disabled=false;
     pub.disabled=!currentDrawingId;
@@ -6854,6 +6942,7 @@ window.addEventListener('keydown',e=>{
     else if(k==='c'){ e.preventDefault(); if(!boneMode) copySelected(); }
     else if(k==='v'){ e.preventDefault(); if(!boneMode) pasteClipboard(); }
     else if(k==='d'){ e.preventDefault(); if(boneMode) duplicateBone(selBone); else duplicateSelected(); }
+    else if(k==='s'){ e.preventDefault(); document.getElementById('btnSave').click(); }
     return;
   }
   if(e.target.tagName==='INPUT'||e.target.tagName==='SELECT') return;  // sliders, the search box, the bone picker
@@ -6874,7 +6963,6 @@ window.addEventListener('keydown',e=>{
   else if(e.key==='2') setTool('smear');
   else if(e.key==='3') setTool('eraser');
   else if(e.key==='4') setTool('hand');
-  else if(e.key==='5'){ if(boneMode){ exitBoneMode(); syncPalette(); render(); } else enterBoneMode(); }
   else if(k==='h') setShading(shading==='hatch'?'gradient':'hatch');
   else if(e.key==='Delete'||e.key==='Backspace'){ if(boneMode) deleteBone(selBone); else deleteSelected(); }
   else if(e.key==='ArrowUp'){   e.preventDefault(); if(!boneMode) reorderSel( 1); }   // up/down are depth,
