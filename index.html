@@ -256,6 +256,11 @@
     font:inherit;padding:9px 10px;outline:none;
   }
   #modalInput:focus{border-color:var(--accent)}
+  #modalChoices{margin:0 0 14px}
+  .mchoice{margin:0 0 8px}
+  .mchoice .mchlabel{font-size:10px;letter-spacing:.09em;text-transform:uppercase;
+    color:var(--muted);margin:0 0 4px}
+  .mchoice .seg button{flex:1;padding:7px 8px;letter-spacing:0}
   .mrow{display:flex;gap:7px}
   .mrow .btn{flex:1;padding:8px 6px;font-weight:600}
   .mrow .btn.primary{border-color:var(--accent);background:#31405c;color:#e7efff}
@@ -749,6 +754,7 @@
     <input id="modalInput" class="hidden" type="text" autocomplete="off">
     <input id="modalInput2" class="hidden" type="text" autocomplete="off" list="tagList">
     <datalist id="tagList"></datalist>
+    <div id="modalChoices" class="hidden"></div>
     <div class="mrow" id="modalBtns"></div>
   </div>
 </div>
@@ -827,7 +833,7 @@ const stage= document.getElementById('stage');
    It is NOT the scene format version (SCENE_VERSION) - that one is data and is
    what migrateScene gates on. Bump the minor part for a feature, the patch part
    for a fix, and bump it in the same commit as the change. */
-const APP_VERSION = '1.2.3';
+const APP_VERSION = '1.3.0';
 
 /* ---------------------------------------------------------------- state */
 /* A document is one of four kinds. A character and an item have a front and a
@@ -5027,6 +5033,34 @@ function openModal(o){
   inp2.classList.toggle('hidden', !o.input2);
   inp .placeholder=(o.input  && o.input .placeholder)||''; inp .value=(o.input  && o.input .value)||'';
   inp2.placeholder=(o.input2 && o.input2.placeholder)||''; inp2.value=(o.input2 && o.input2.value)||'';
+  /* Optional segmented choices: [{key, label, value, options:[{v,label,disabled}]}].
+     Whatever is picked is handed to onClick as a third argument, keyed by `key`,
+     so a caller wanting a couple of radio buttons does not need a modal of its
+     own - which would skip `modalOpen` and leak the tool keys into the editor. */
+  const chWrap=document.getElementById('modalChoices');
+  chWrap.innerHTML=''; chWrap.classList.toggle('hidden', !o.choices);
+  const chose={};
+  for(const g of (o.choices||[])){
+    chose[g.key]=g.value;
+    const row=document.createElement('div'); row.className='mchoice';
+    if(g.label){ const h=document.createElement('div'); h.className='mchlabel';
+                 h.textContent=g.label; row.appendChild(h); }
+    const seg=document.createElement('div'); seg.className='seg';
+    for(const opt of g.options){
+      const el=document.createElement('button');
+      el.textContent=opt.label; el.disabled=!!opt.disabled;
+      el.classList.toggle('on', opt.v===g.value);
+      el.addEventListener('click',()=>{
+        chose[g.key]=opt.v;
+        for(const x of seg.children) x.classList.remove('on');
+        el.classList.add('on');
+        if(o.onChoice) o.onChoice(chose);
+      });
+      seg.appendChild(el);
+    }
+    row.appendChild(seg); chWrap.appendChild(row);
+  }
+
   modalBtns.innerHTML='';
   let fire=null, primaryEl=null;
   for(const b of o.buttons){
@@ -5034,7 +5068,7 @@ function openModal(o){
     el.className='btn'+(b.primary?' primary':'')+(b.danger?' danger':'');
     el.textContent=b.label;
     const go=()=>{ if(el.disabled) return; const v=inp.value, v2=inp2.value;
-                   closeModal(); if(b.onClick) b.onClick(v,v2); };
+                   closeModal(); if(b.onClick) b.onClick(v,v2,chose); };
     if(b.primary){ fire=go; primaryEl=el; }
     el.addEventListener('click',go);
     modalBtns.appendChild(el);
@@ -5158,6 +5192,21 @@ document.getElementById('btnDelete').addEventListener('click',deleteSelected);
    through the module-level ctx, so the cheapest way to point it somewhere
    else is to retarget the canvas we already have and put it back after. */
 const EXPORT_SCALE = 2;
+/* A GIF is encoded in JS, a pixel at a time, so 2x a full stage is minutes of
+   work for a file nobody wants. The longest side is fitted to this instead. */
+const GIF_MAXDIM   = 480;
+
+/* The world crop for a list of shapes in one frame - the outline straddles the
+   path, so each shape claims half its own width beyond its points. */
+function exportBBox(shapes, fi, pv){
+  let x0=1e9,y0=1e9,x1=-1e9,y1=-1e9;
+  for(const s of shapes){
+    const b=bbox(worldPts(s,fi,pv)), pad=s.lw/2+1;
+    if(b.x0-pad<x0) x0=b.x0-pad;  if(b.y0-pad<y0) y0=b.y0-pad;
+    if(b.x1+pad>x1) x1=b.x1+pad;  if(b.y1+pad>y1) y1=b.y1+pad;
+  }
+  return {x0,y0,x1,y1};
+}
 
 /* Draws one frame of one view alone, cropped to its shapes, and hands back a
    data URL. opts: {scale} outright, or {maxDim} to fit the longest side (never
@@ -5178,12 +5227,7 @@ function renderViewToDataURL(vName, opts){
      belongs to the view we are standing in. */
   const pv = (opts && opts.shapes) ? view : vName;
 
-  let x0=1e9,y0=1e9,x1=-1e9,y1=-1e9;
-  for(const s of shapes){
-    const b=bbox(worldPts(s,fi,pv)), pad=s.lw/2+1;   // the outline straddles the path
-    if(b.x0-pad<x0) x0=b.x0-pad;  if(b.y0-pad<y0) y0=b.y0-pad;
-    if(b.x1+pad>x1) x1=b.x1+pad;  if(b.y1+pad>y1) y1=b.y1+pad;
-  }
+  const {x0,y0,x1,y1}=exportBBox(shapes,fi,pv);
   const w=Math.max(1,Math.ceil(x1-x0)), h=Math.max(1,Math.ceil(y1-y0));
 
   const o = opts||{};
@@ -5200,14 +5244,241 @@ function renderViewToDataURL(vName, opts){
   return url;
 }
 
-function exportPNG(){
-  const url = renderViewToDataURL(view,{scale:EXPORT_SCALE});
-  if(!url) return;
-  const a=document.createElement('a');
-  a.href=url; a.download='drawthing-'+view+'-'+frame+'.png';
-  a.click();
+/* ------------------------------------------------------------- export GIF
+   Hand-rolled, because there is no build step and no dependency on anything but
+   the Supabase client: one median-cut palette over every frame at once, LZW, and
+   the GIF89a envelope round it. GIF has 1-bit transparency and nothing softer,
+   so the antialiased rim of a shape is thresholded at GIF_ALPHA. */
+const GIF_ALPHA = 128;
+
+/* A weighted median cut over a 5-bit-per-channel histogram of every frame. The
+   buckets are 5-bit so the sort stays cheap, but each one carries the EXACT
+   colour sums of the pixels in it, so a flat fill comes back out exactly rather
+   than snapped to a bucket centre. */
+function gifPalette(datas, maxCols){
+  const hist=new Map();
+  for(const d of datas){ const a=d.data;
+    for(let i=0;i<a.length;i+=4){ if(a[i+3]<GIF_ALPHA) continue;
+      const k=((a[i]>>3)<<10)|((a[i+1]>>3)<<5)|(a[i+2]>>3);
+      let e=hist.get(k); if(!e){ e=[0,0,0,0]; hist.set(k,e); }
+      e[0]++; e[1]+=a[i]; e[2]+=a[i+1]; e[3]+=a[i+2]; } }
+  const keys=[...hist.keys()];
+  if(!keys.length) return [[0,0,0]];
+  const weigh=box=>box.reduce((s,k)=>s+hist.get(k)[0],0);
+  let boxes=[keys];
+  while(boxes.length<maxCols){
+    let bi=-1,best=0;
+    for(let i=0;i<boxes.length;i++){ if(boxes[i].length<2) continue;
+      const n=weigh(boxes[i]); if(n>best){ best=n; bi=i; } }
+    if(bi<0) break;
+    const box=boxes[bi];
+    let lo=[31,31,31], hi=[0,0,0];
+    for(const k of box){ const c=[(k>>10)&31,(k>>5)&31,k&31];
+      for(let j=0;j<3;j++){ if(c[j]<lo[j])lo[j]=c[j]; if(c[j]>hi[j])hi[j]=c[j]; } }
+    let ch=0; for(let j=1;j<3;j++) if(hi[j]-lo[j] > hi[ch]-lo[ch]) ch=j;
+    const sh=[10,5,0][ch];
+    box.sort((a,b)=>(((a>>sh)&31)-((b>>sh)&31)));
+    /* The cut has to leave BOTH halves something: one bucket can hold most of
+       the weight, and a median landing on the last one gave an empty box whose
+       average was NaN - which then swallowed every nearest-colour search. */
+    const total=weigh(box); let acc=0, cut=0;
+    for(cut=0;cut<box.length-2;cut++){ acc+=hist.get(box[cut])[0]; if(acc*2>=total) break; }
+    boxes.splice(bi,1,box.slice(0,cut+1),box.slice(cut+1));
+  }
+  return boxes.map(box=>{
+    let r=0,g=0,b=0,n=0;
+    for(const k of box){ const e=hist.get(k); n+=e[0]; r+=e[1]; g+=e[2]; b+=e[3]; }
+    return [Math.round(r/n),Math.round(g/n),Math.round(b/n)];
+  });
 }
-document.getElementById('btnExport').addEventListener('click',exportPNG);
+
+/* Index 0 is the transparent slot, so a palette colour j is index j+1. */
+function gifIndex(d, pal, cache){
+  const a=d.data, out=new Uint8Array(d.width*d.height);
+  for(let i=0,p=0;i<a.length;i+=4,p++){
+    if(a[i+3]<GIF_ALPHA){ out[p]=0; continue; }
+    const k=((a[i]>>3)<<10)|((a[i+1]>>3)<<5)|(a[i+2]>>3);
+    let ix=cache.get(k);
+    if(ix===undefined){
+      let bd=1e12;
+      for(let j=0;j<pal.length;j++){
+        const dr=pal[j][0]-a[i], dg=pal[j][1]-a[i+1], db=pal[j][2]-a[i+2];
+        const dd=dr*dr+dg*dg+db*db; if(dd<bd){ bd=dd; ix=j+1; }
+      }
+      cache.set(k,ix);
+    }
+    out[p]=ix;
+  }
+  return out;
+}
+
+/* Plain GIF LZW. The code size steps up once the table has outgrown it, and a
+   full table emits a clear and starts over - which is what the decoder expects. */
+function lzwEncode(px, minCodeSize){
+  const clear=1<<minCodeSize, eoi=clear+1;
+  let codeSize=minCodeSize+1, next=eoi+1, dict=new Map();
+  const out=[]; let cur=0, bits=0;
+  /* The width has to cover every code that can still be emitted, which is
+     `next-1` - including it, since the decoder's KwKwK case really can be that
+     code. So the step up is `next > 1<<codeSize`, checked as a code goes out
+     rather than as an entry goes in: the decoder builds its table one entry
+     behind, and either off-by-one garbles the stream from the first step up. */
+  const emit=c=>{ if(next>(1<<codeSize) && codeSize<12) codeSize++;
+                  cur|=c<<bits; bits+=codeSize;
+                  while(bits>=8){ out.push(cur&255); cur>>>=8; bits-=8; } };
+  emit(clear);
+  if(!px.length){ emit(eoi); if(bits>0) out.push(cur&255); return out; }
+  let prefix=px[0];
+  for(let i=1;i<px.length;i++){
+    const k=px[i], key=prefix*4096+k, f=dict.get(key);
+    if(f!==undefined){ prefix=f; continue; }
+    emit(prefix);
+    if(next<4096){ dict.set(key,next++); }
+    else { emit(clear); dict=new Map(); next=eoi+1; codeSize=minCodeSize+1; }
+    prefix=k;
+  }
+  emit(prefix); emit(eoi);
+  if(bits>0) out.push(cur&255);
+  return out;
+}
+
+function encodeGIF(datas, w, h, delayCs){
+  const pal=gifPalette(datas,255);
+  let bits=1; while((1<<bits) < pal.length+1) bits++;   // +1 for the clear slot
+  if(bits<2) bits=2;                                    // GIF's own minimum
+  const tableLen=1<<bits, out=[];
+  const b1=v=>out.push(v&255), b2=v=>out.push(v&255,(v>>8)&255);
+  const str=s=>{ for(const c of s) out.push(c.charCodeAt(0)); };
+  str('GIF89a');
+  b2(w); b2(h); b1(0xF0|(bits-1)); b1(0); b1(0);        // global table, 8-bit colour
+  out.push(0,0,0);                                      // index 0: the transparent slot
+  for(const c of pal) out.push(c[0],c[1],c[2]);
+  for(let i=pal.length+1;i<tableLen;i++) out.push(0,0,0);
+  out.push(0x21,0xFF,0x0B); str('NETSCAPE2.0'); out.push(0x03,0x01,0,0,0x00);  // loop for ever
+  const cache=new Map();
+  for(const d of datas){
+    /* dispose=2 (restore to background) + transparency, so a frame does not
+       show through the one before it where the drawing has moved. */
+    out.push(0x21,0xF9,0x04,0x09); b2(delayCs); out.push(0,0x00);
+    out.push(0x2C); b2(0); b2(0); b2(w); b2(h); b1(0);
+    b1(bits);
+    const bytes=lzwEncode(gifIndex(d,pal,cache), bits);
+    for(let i=0;i<bytes.length;i+=255){
+      const n=Math.min(255,bytes.length-i); out.push(n);
+      for(let j=0;j<n;j++) out.push(bytes[i+j]);
+    }
+    out.push(0);
+  }
+  out.push(0x3B);
+  return new Uint8Array(out);
+}
+
+/* Every frame of one view, cropped to a single shared box - the union over the
+   frames, so nothing jitters against its own neighbours or falls outside. Same
+   canvas retarget as renderViewToDataURL, done once for the whole run. */
+function renderFramesToImageData(vName, box, scale, only){
+  const w=Math.max(1,Math.ceil(box.x1-box.x0)), h=Math.max(1,Math.ceil(box.y1-box.y0));
+  const cw=Math.max(1,Math.round(w*scale)), ch=Math.max(1,Math.round(h*scale));
+  cv.width=cw; cv.height=ch;
+  const datas=[];
+  for(let fi=0; fi<frameCount(); fi++){
+    ctx.setTransform(scale,0,0,scale,-box.x0*scale,-box.y0*scale);
+    ctx.clearRect(box.x0,box.y0,w,h);
+    for(const s of ((views[vName]||[])[fi]||[])){
+      if(only && !only.has(s.id)) continue;
+      if(s.pts.length<3) continue;
+      drawShape(s,{pframe:fi, pview:vName});
+    }
+    ctx.setTransform(1,0,0,1,0,0);
+    datas.push(ctx.getImageData(0,0,cw,ch));
+  }
+  resize(); render();                  // put the canvas back before a frame lands
+  return {datas, w:cw, h:ch};
+}
+
+/* ------------------------------------------------------------ the export modal
+   Two choices: what to draw, and what to write it as. `all` is the whole frame;
+   `sel` is the selection. PNG is the frame you are standing on; GIF is every
+   frame of this view at FPS, which for a selection means the animation cropped
+   to the selection's box - shapes are per frame and have no identity across
+   them, so "just these shapes, every frame" is not a thing that can be asked. */
+function exportName(){
+  const base=(currentDrawingTitle||'drawthing')
+    .replace(/[\\/:*?"<>|]+/g,'').replace(/\s+/g,' ').trim() || 'drawthing';
+  return base;
+}
+function saveBlob(href, name, revoke){
+  const a=document.createElement('a');
+  a.href=href; a.download=name; a.click();
+  if(revoke) setTimeout(()=>URL.revokeObjectURL(href), 2000);
+}
+
+function exportPNG(scope){
+  const grp = scope==='sel' ? selGroup() : null;
+  const url = renderViewToDataURL(view, grp ? {scale:EXPORT_SCALE, shapes:grp}
+                                            : {scale:EXPORT_SCALE});
+  if(!url){ openModal({title:'Nothing to export', body:'There are no shapes here to write out.',
+                       buttons:[{label:'OK',primary:true}]}); return; }
+  let n=exportName();
+  if(viewNames.length>1) n+='-'+view;
+  if(frameCount()>1)     n+='-'+frame;
+  saveBlob(url, n+'.png');
+}
+
+function exportGIF(scope){
+  const grp = scope==='sel' ? selGroup() : null;
+  /* The crop. For a selection it is that selection's own box in this frame; for
+     the whole drawing it is the union over every frame, so the figure keeps its
+     place from one to the next instead of being re-centred each time. */
+  let box=null;
+  if(grp){
+    const use=grp.filter(s=>s.pts.length>=3);
+    if(use.length) box=exportBBox(use, frame, view);
+  } else {
+    for(let fi=0; fi<frameCount(); fi++){
+      const use=((views[view]||[])[fi]||[]).filter(s=>s.pts.length>=3);
+      if(!use.length) continue;
+      const b=exportBBox(use, fi, view);
+      box = box ? {x0:Math.min(box.x0,b.x0), y0:Math.min(box.y0,b.y0),
+                   x1:Math.max(box.x1,b.x1), y1:Math.max(box.y1,b.y1)} : b;
+    }
+  }
+  if(!box){ openModal({title:'Nothing to export', body:'There are no shapes here to write out.',
+                       buttons:[{label:'OK',primary:true}]}); return; }
+  const w=Math.max(1,box.x1-box.x0), h=Math.max(1,box.y1-box.y0);
+  const scale=Math.min(1, GIF_MAXDIM/Math.max(w,h));
+  /* A selection's shapes only exist in the frame they were picked in, so the
+     selection sets the CROP and every frame is drawn whole inside it - hence no
+     shape filter here, unlike the PNG path. */
+  const {datas, w:gw, h:gh}=renderFramesToImageData(view, box, scale, null);
+  const bytes=encodeGIF(datas, gw, gh, Math.max(2,Math.round(100/FPS)));
+  const url=URL.createObjectURL(new Blob([bytes],{type:'image/gif'}));
+  saveBlob(url, exportName()+(viewNames.length>1?'-'+view:'')+'.gif', true);
+}
+
+function openExportModal(){
+  const many=frameCount()>1, has=!!selected;
+  openModal({
+    title:'Export',
+    body:'PNG writes this frame. GIF writes '+(many?'all '+frameCount()+' frames':'this one frame')+
+         ' of the '+viewLabel(view)+' view at '+FPS+' fps'+
+         (has?'. A selection crops the GIF to itself, frames and all.':'.'),
+    choices:[
+      {key:'scope', label:'What', value: has?'sel':'all', options:[
+        {v:'all', label:'All shapes'},
+        {v:'sel', label:'Selected', disabled:!has}]},
+      {key:'fmt', label:'Format', value:'png', options:[
+        {v:'png', label:'PNG'},
+        {v:'gif', label:'GIF'}]}
+    ],
+    buttons:[
+      {label:'Export', primary:true, onClick:(v,v2,ch)=>{
+         if(ch.fmt==='gif') exportGIF(ch.scope); else exportPNG(ch.scope); }},
+      {label:'Cancel'}
+    ]
+  });
+}
+document.getElementById('btnExport').addEventListener('click',openExportModal);
 
 /* ==================================================== the scene format (v1)
    What gets stored, and what a game that does not exist yet will have to read.
