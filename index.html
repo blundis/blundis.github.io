@@ -159,6 +159,18 @@
   .fchip.drop{border-color:var(--accent);border-style:dashed}
 
   /* ---------- right palette ---------- */
+  /* It folds away, and it starts folded on a narrow screen, where 300px is most
+     of the width. #stage's ResizeObserver picks the canvas up either way, so
+     there is nothing to keep in step. */
+  body.nopal #palette{display:none}
+  #btnPalToggle{
+    position:absolute;top:12px;right:12px;z-index:11;
+    width:26px;height:26px;padding:0;border-radius:8px;
+    background:var(--chrome-2);border:1px solid #4a4441;color:var(--ink);
+    font:inherit;line-height:1;cursor:pointer;opacity:.85;
+    display:flex;align-items:center;justify-content:center;
+  }
+  #btnPalToggle:hover{opacity:1}
   #palette{
     width:300px;flex:0 0 300px;background:var(--chrome-2);border-left:1px solid #171513;
     position:relative;z-index:5;
@@ -540,6 +552,7 @@
 <div id="stage">
   <canvas id="cv"></canvas>
   <div id="version"></div>
+  <button id="btnPalToggle" title="Show or hide the sidebar"></button>
   <div id="topbar">
     <div class="seg" id="viewSeg">
       <button data-view="front" class="on">Front<span class="kbd">Q</span></button>
@@ -665,6 +678,7 @@
     <div class="prow" id="mkObjWrap">
       <button class="pbtn" id="mkObjBtn"><svg viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="2.4"/><path d="M12 8.5v7"/><path d="M8.5 12h7"/></svg>Make Object</button>
       <div id="mkObjMenu" class="hidden">
+        <button class="pbtn" data-mkobj="character">New Drawing</button>
         <button class="pbtn" data-mkobj="eyes">New Eyes</button>
         <button class="pbtn" data-mkobj="mouths">New Mouth</button>
         <button class="pbtn" data-mkobj="item">New Item</button>
@@ -726,7 +740,8 @@
    </div>
 
    <div class="psec btoolopt" id="optBHand">
-     <button class="pbtn" id="btnResetPose">Reset this frame to rest</button>
+     <div class="prow"><button class="pbtn" id="btnPoseRest">Current pose as rest</button></div>
+     <div class="prow"><button class="pbtn" id="btnResetPose">Reset pose to rest</button></div>
    </div>
 
    <div class="psec btoolopt" id="optBSkin">
@@ -739,6 +754,10 @@
        <button class="pbtn" id="btnUnbind">Remove</button>
      </div>
      <div class="prow"><button class="pbtn" id="btnHideBound">Hide attached shapes</button></div>
+     <div class="prow">
+       <button class="pbtn" id="btnHideShape">Hide selected</button>
+       <button class="pbtn" id="btnShowAll">Show all</button>
+     </div>
      <div class="slider"><span>Falloff</span><input type="range" id="optBindFall" min="20" max="400" step="5" value="90"><span class="val" id="optBindFallv">90</span></div>
      <div id="skinNote"></div>
    </div>
@@ -826,6 +845,11 @@
 
 <div id="ghost"></div>
 
+<!-- The shared runtime. A CLASSIC script, and FIRST: the app script below
+     builds its document handle at top level and needs DT to already exist.
+     See dt.js for why it is not a module. -->
+<script src="dt.js"></script>
+
 <script type="module">
 /* The Supabase client is the one thing in here that is not hand-written, and it
    only exists as an ES module - so it loads in a module script of its own and
@@ -859,7 +883,7 @@ const stage= document.getElementById('stage');
    It is NOT the scene format version (SCENE_VERSION) - that one is data and is
    what migrateScene gates on. Bump the minor part for a feature, the patch part
    for a fix, and bump it in the same commit as the change. */
-const APP_VERSION = '1.4.0';
+const APP_VERSION = '1.6.0';
 
 /* ---------------------------------------------------------------- state */
 /* A document is one of four kinds. A character and an item have a front and a
@@ -872,14 +896,7 @@ const APP_VERSION = '1.4.0';
    `ref:true` is what puts a kind in the Library. A character is deliberately
    left out: nothing stops a character being referenced technically, it is just
    not offered, to keep the model easy to reason about. */
-const DOC_KINDS = {
-  character:{ label:'Image',  views:[['front','Front'],['back','Back']], frames:'free', ref:false },
-  item:     { label:'Item',   views:[['front','Front'],['back','Back']], frames:'free', ref:true  },
-  eyes:     { label:'Eyes',   views:[['main','Main']], frames:'fixed', ref:true,
-              frameNames:['Normal','Blink','Suspicious','Surprised','Angry','Sad'] },
-  mouths:   { label:'Mouths', views:[['main','Main']], frames:'fixed', ref:true,
-              frameNames:['Closed','Open','Happy','Sad','Screaming'] }
-};
+const DOC_KINDS = DT.DOC_KINDS;
 let   docKind   = 'character';
 let   viewNames = ['front','back'];
 const canImport = () => docKind==='character' || docKind==='item';
@@ -903,7 +920,7 @@ const frameKind  = () => (DOC_KINDS[docKind]||DOC_KINDS.character).frames;
 const cur     = () => (views[view]||[])[frame] || [];
 let   playing = false, playTimer = 0;
 let   playDir = 1;             // ping-pong's current direction
-const FPS     = 12;
+const FPS     = DT.FPS;
 
 /* ---------------------------------------------------------- the animations
    A document holds MANY named animations - Walk, Run, Jump - and `views` above
@@ -917,7 +934,7 @@ const FPS     = 12;
    list itself already documents. So `stashAnim` writes the live arrays back into
    the record before anything reads the LIST, and `applyAnim` loads them out
    again. Everything that walks the whole document goes through eachAnimViews. */
-const STD_ANIMS = ['Idle','Walk','Run','Jump','Land','Hurt','Fall','Die','Throw','Attack Melee'];
+const STD_ANIMS = DT.STD_ANIMS;
 let anims   = [];   // [{name, loop, pingpong, views:{key:[frames]}, pose:[delta]}]
 let animIdx = 0;
 const curAnim = () => anims[animIdx] || {name:'', loop:true, pingpong:false};
@@ -987,26 +1004,15 @@ let   uid     = 1;
 
 // A slot holding NONE means "do not render this part at all".
 const NONE = 'none';
-const paint = c => c===NONE ? 'rgba(0,0,0,0)' : c;   // for gradient stops
+const paint = DT.paint;                              // for gradient stops
 
 /* An outline the colour of the paper is invisible for the whole time it is
    being drawn, which is exactly when you need to see it. PAPER_RGB is the one
    the canvas is filled with; `lowContrast` is what the live stroke tests to
    decide whether to invert itself instead of using the colour honestly. */
-const PAPER_RGB = [0xF7,0xF4,0xEE];
-function hexRGB(c){
-  if(typeof c!=='string') return null;
-  let h=c.trim().replace('#','');
-  if(h.length===3) h=h[0]+h[0]+h[1]+h[1]+h[2]+h[2];
-  if(!/^[0-9a-fA-F]{6}$/.test(h)) return null;
-  return [parseInt(h.slice(0,2),16),parseInt(h.slice(2,4),16),parseInt(h.slice(4,6),16)];
-}
-function lowContrast(c){
-  if(c===NONE) return true;
-  const a=hexRGB(c);
-  if(!a) return false;
-  return Math.abs(a[0]-PAPER_RGB[0])+Math.abs(a[1]-PAPER_RGB[1])+Math.abs(a[2]-PAPER_RGB[2]) < 96;
-}
+const PAPER_RGB = DT.PAPER_RGB;
+function hexRGB(c){ return DT.hexRGB(c); }
+function lowContrast(c){ return DT.lowContrast(c); }
 
 // persistent colour choice - new shapes inherit this
 let current = { outline:'#2E2A28', fill:'#F7C59F', shadow:'#B9713F' };
@@ -1092,7 +1098,7 @@ const canRig = () => docKind==='character' || docKind==='item';
 
 /* poseAt is to bonePose what cur() is to views: the render loop is always in
    flight and must never read undefined out of it. */
-const poseAt   = f => bonePose[f] || {};
+const poseAt   = f => DT.poseAt(EDOC, f);
 const boneById = id => { for(const b of rig) if(b.id===id) return b; return null; };
 const boneKids = id => rig.filter(b=>b.parent===id);
 function clonePose(p){ const o={}; for(const k of Object.keys(p||{})) o[k]=cloneDelta(p[k]); return o; }
@@ -1112,13 +1118,13 @@ function fitBonePose(n){
 /* --------------------------------------------------- the rest, per view
    restAt is to restPose what cur() is to views and poseAt is to bonePose: the
    render loop is always in flight and must never read undefined out of it. */
-const REST0 = {len:0, rot:0, att:1, off:0, mx:1, my:1};
-const restAt   = v => restPose[v||view] || (restPose[v||view] = {});
-const restBone = (id,v) => restAt(v)[id] || REST0;
+const REST0 = DT.REST0;
+const restAt   = v      => DT.restAt(EDOC, v);
+const restBone = (id,v) => DT.restBone(EDOC, id, v);
 // the rotation sense: a reflected rest swings the other way for the same delta
-const mirOf = r => (r.mx==null?1:r.mx)*(r.my==null?1:r.my);
-const sgnX  = r => (r.mx<0 ? -1 : 1);
-const sgnY  = r => (r.my<0 ? -1 : 1);
+const mirOf = DT.mirOf;
+const sgnX  = DT.sgnX;
+const sgnY  = DT.sgnY;
 
 /* Reading and writing a pose entry. Everything outside boneWorld thinks in
    ABSOLUTE local angles and world lengths, exactly as it did before deltas -
@@ -1162,7 +1168,49 @@ const refLib   = new Map();   // ref.key -> {kind,title,drawingId,rev,tags,autho
    the recursion needs - except a stop. A cycle IS reachable (item A saved
    referencing B, then B edited to reference A), so this is a guard, not an
    assertion. */
-const REF_MAX_DEPTH = 4;
+const REF_MAX_DEPTH = DT.REF_MAX_DEPTH;
+
+/* ------------------------------------------------- the editor's document
+   EDOC is the handle dt.js takes. It is NOT a copy of the state above and
+   below: every field is a LIVE ACCESSOR over the top-level binding it stands
+   for, so it reads that binding at the moment it is asked.
+
+   That is the whole reason this works. `rig`, `restPose`, `bonePose` and
+   `anims` are REASSIGNED WHOLESALE by restore(), applyAnim() and
+   sceneFromJSON(), and `views` is a const whose keys setViewNames deletes and
+   rebuilds in place. A Doc holding a snapshot of any of them would silently
+   detach at that point - the same trap the frame list itself documents - and
+   the detachment would not show up until something posed a bone.
+
+   So there is nothing to keep in step and nothing to forget. Nothing else in
+   this file knows EDOC exists; the runtime is reached through the same-named
+   forwarders that sit beside each moved function.
+
+   Note the CACHES are deliberately absent from this map: _mats, _matQ and
+   _skin are own data properties of the Doc, because they belong to the Doc
+   rather than to whatever it is a view onto. */
+const EDOC = DT.newDoc();
+DT.bindDoc(EDOC, {
+  views:     ()=>views,        // const, but setViewNames re-keys it in place
+  viewNames: ()=>viewNames,
+  view:      ()=>view,
+  frame:     ()=>frame,
+  kind:      ()=>docKind,
+  anims:     ()=>anims,
+  animIdx:   ()=>animIdx,
+  refLib:    ()=>refLib,       // const Map, mutated in place
+  rig:       ()=>rig,          // let, reassigned wholesale - this is the point
+  restPose:  ()=>restPose,     // ditto
+  bonePose:  ()=>bonePose,     // ditto
+  rigRev:    ()=>rigRev,       // so a bare `rigRev++` below keeps working
+  bindRev:   ()=>bindRev,
+  shading:   ()=>shading,
+  lightFrom: ()=>LIGHT_FROM,
+  lightTo:   ()=>LIGHT_TO,
+  id:        ()=>currentDrawingId,
+  title:     ()=>currentDrawingTitle,
+  rev:       ()=>currentDrawingRev,
+});
 
 /* The whole selection, anchor first. Every group operation goes through this. */
 const selGroup = () => selected ? [selected].concat(extra) : [];
@@ -1196,89 +1244,42 @@ const MIN_RUN   = 16;   // below this the stroke is a dab, not a loop
 function closeThresholdFor(len){
   return Math.max(CLOSE_MIN, Math.min(CLOSE_MAX, len*closeFrac));
 }
-function pathLength(pts){
-  let L=0; for(let i=1;i<pts.length;i++) L+=dist(pts[i-1],pts[i]);
-  return L;
-}
+function pathLength(pts){ return DT.pathLength(pts); }
 
-/* ------------------------------------------------------------- geometry */
-const TAU = Math.PI*2;
-const dist = (a,b)=>Math.hypot(a.x-b.x, a.y-b.y);
+/* ------------------------------------------------------------- geometry
+   The bodies live in dt.js now - the game needs the same maths. These are
+   forwarders of the identical signature, so every call site here is unchanged;
+   they are `function` declarations rather than const aliases because a
+   declaration hoists and a const does not. */
+const TAU  = DT.TAU;
+const dist = DT.dist;
 
-function toWorld(s,p){
-  const x=p.x*s.sx, y=p.y*s.sy, c=Math.cos(s.rot), n=Math.sin(s.rot);
-  return { x: s.x + x*c - y*n, y: s.y + x*n + y*c };
-}
-function toLocal(s,w){
-  const dx=w.x-s.x, dy=w.y-s.y, c=Math.cos(-s.rot), n=Math.sin(-s.rot);
-  return { x:(dx*c - dy*n)/s.sx, y:(dx*n + dy*c)/s.sy };
-}
+function toWorld(s,p){ return DT.toWorld(s,p); }
+function toLocal(s,w){ return DT.toLocal(s,w); }
 /* worldPts is defined down in the skinning section: it is the one hook the
    whole bone deformation hangs off, and it needs boneWorld and the rig. */
 
-function bbox(pts){
-  let a=1e9,b=1e9,c=-1e9,d=-1e9;
-  for(const p of pts){ if(p.x<a)a=p.x; if(p.y<b)b=p.y; if(p.x>c)c=p.x; if(p.y>d)d=p.y; }
-  return {x0:a,y0:b,x1:c,y1:d,w:c-a,h:d-b,cx:(a+c)/2,cy:(b+d)/2};
-}
+function bbox(pts){ return DT.bbox(pts); }
 
-const mid=(a,b)=>({x:(a.x+b.x)/2,y:(a.y+b.y)/2});
+const mid = DT.mid;
 
 /* Smooth closed path through points (quadratics via segment midpoints).
    This is the single biggest "makes a wobbly hand look competent" trick.
    The FILL always uses this, closed or not - that is what lets an open
    stroke still hold colour. */
-function buildPath(g,pts){
-  const n=pts.length;
-  g.beginPath();
-  if(n<3){ if(n) g.moveTo(pts[0].x,pts[0].y); for(let i=1;i<n;i++) g.lineTo(pts[i].x,pts[i].y); return; }
-  const m0=mid(pts[n-1],pts[0]);
-  g.moveTo(m0.x,m0.y);
-  for(let i=0;i<n;i++){
-    const p=pts[i], q=pts[(i+1)%n], m=mid(p,q);
-    g.quadraticCurveTo(p.x,p.y,m.x,m.y);
-  }
-  g.closePath();
-}
+function buildPath(g,pts){ return DT.buildPath(g,pts); }
 
 /* The region a shape fills. For an open stroke the chord is a dead-straight
    line between the two endpoints, so the bare edge really is flat and the
    outline stops exactly on it instead of overshooting into whiskers. */
-function buildFill(g,pts,closed){
-  if(closed) buildPath(g,pts);
-  else { buildOpenPath(g,pts); g.closePath(); }
-}
+function buildFill(g,pts,closed){ return DT.buildFill(g,pts,closed); }
 
 /* Same curve, but only across the part the user actually drew - the closing
    chord is left bare so shapes can be layered against a clean edge. */
-function buildOpenPath(g,pts){
-  const n=pts.length;
-  g.beginPath();
-  if(n<3){ if(n) g.moveTo(pts[0].x,pts[0].y); for(let i=1;i<n;i++) g.lineTo(pts[i].x,pts[i].y); return; }
-  g.moveTo(pts[0].x,pts[0].y);
-  for(let i=1;i<n-1;i++){
-    const m=mid(pts[i],pts[i+1]);
-    g.quadraticCurveTo(pts[i].x,pts[i].y,m.x,m.y);
-  }
-  g.lineTo(pts[n-1].x,pts[n-1].y);
-}
+function buildOpenPath(g,pts){ return DT.buildOpenPath(g,pts); }
 
 /* Ramer-Douglas-Peucker */
-function rdp(pts,eps){
-  if(pts.length<3) return pts.slice();
-  const keep=new Array(pts.length).fill(false);
-  keep[0]=keep[pts.length-1]=true;
-  (function rec(a,b){
-    let idx=-1,max=0;
-    const A=pts[a],B=pts[b], dx=B.x-A.x, dy=B.y-A.y, len=Math.hypot(dx,dy)||1;
-    for(let i=a+1;i<b;i++){
-      const d=Math.abs((pts[i].x-A.x)*dy-(pts[i].y-A.y)*dx)/len;
-      if(d>max){max=d;idx=i;}
-    }
-    if(max>eps && idx>0){ keep[idx]=true; rec(a,idx); rec(idx,b); }
-  })(0,pts.length-1);
-  return pts.filter((_,i)=>keep[i]);
-}
+function rdp(pts,eps){ return DT.rdp(pts,eps); }
 
 /* RDP measures every point against the chord from the FIRST point to the LAST.
    On a CLOSED loop those two are neighbours, so that baseline is degenerate and
@@ -1289,61 +1290,25 @@ function rdp(pts,eps){
    open runs - the baseline is then the shape's own long axis every time. The
    pair is the usual two-pass approximation of the diameter (furthest from any
    point, then furthest from that), so it does not depend on the seam either. */
-function rdpLoop(pts,eps){
-  const n=pts.length; if(n<6) return rdp(pts,eps);
-  const farFrom=i=>{ let k=i,best=-1;
-    for(let j=0;j<n;j++){ const d=dist(pts[i],pts[j]); if(d>best){best=d;k=j;} } return k; };
-  let a=farFrom(farFrom(0)), b=farFrom(a);
-  if(a>b){ const t=a; a=b; b=t; }
-  // Degenerate split (the two ends adjacent) leaves nothing to simplify.
-  if(b-a<2 || n-(b-a)<2) return rdp(pts,eps);
-  const A=rdp(pts.slice(a,b+1),eps);                    // a -> b
-  const B=rdp(pts.slice(b).concat(pts.slice(0,a+1)),eps); // b -> a, round the seam
-  return A.slice(0,-1).concat(B.slice(0,-1));           // drop the shared ends
-}
+function rdpLoop(pts,eps){ return DT.rdpLoop(pts,eps); }
 
 /* Even spacing => predictable dots to drag and clean deformation.
    Open shapes are resampled along the drawn run only, keeping both
    endpoints exact - no points are invented along the closing chord. */
-function resample(pts,step,closed){
-  const n=pts.length; if(n<3) return pts.slice();
-  const out=[]; let carry=0;
-  const last = closed ? n : n-1;
-  for(let i=0;i<last;i++){
-    const a=pts[i], b=pts[(i+1)%n];
-    const seg=dist(a,b); if(seg<1e-6) continue;
-    let t=carry;
-    while(t<seg){ out.push({x:a.x+(b.x-a.x)*t/seg, y:a.y+(b.y-a.y)*t/seg}); t+=step; }
-    carry=t-seg;
-  }
-  if(!closed) out.push({x:pts[n-1].x, y:pts[n-1].y});
-  return out.length>=3?out:pts.slice();
-}
+function resample(pts,step,closed){ return DT.resample(pts,step,closed); }
 
-function arcLengths(pts,closed){
-  const n=pts.length, s=new Array(n); let acc=0;
-  for(let i=0;i<n;i++){
-    s[i]=acc;
-    if(closed || i<n-1) acc+=dist(pts[i],pts[(i+1)%n]);
-  }
-  return {s,total:acc||1};
-}
+function arcLengths(pts,closed){ return DT.arcLengths(pts,closed); }
 
 /* -------------------------------------------------------------- colours */
-function hex2rgb(h){
-  h=h.replace('#','');
-  if(h.length===3) h=h.split('').map(c=>c+c).join('');
-  return [parseInt(h.slice(0,2),16),parseInt(h.slice(2,4),16),parseInt(h.slice(4,6),16)];
-}
-const clamp255=v=>Math.max(0,Math.min(255,Math.round(v)));
-function shade(hex,amt){ // amt>0 lighten, amt<0 darken
-  const [r,g,b]=hex2rgb(hex);
-  const f=v=> amt>0 ? v+(255-v)*amt : v*(1+amt);
-  return 'rgb('+clamp255(f(r))+','+clamp255(f(g))+','+clamp255(f(b))+')';
-}
+function hex2rgb(h){ return DT.hex2rgb(h); }
+const clamp255 = DT.clamp255;
+function shade(hex,amt){ return DT.shade(hex,amt); }   // amt>0 lighten, amt<0 darken
 
 /* ------------------------------------------------------------ rendering */
 let dpr=1;
+let panX=0, panY=0;          // the stage offset; world = screen - pan
+let pan=null;                // an in-flight pan gesture
+const mod=(a,n)=>((a%n)+n)%n;
 function resize(){
   dpr = window.devicePixelRatio||1;
   const r = stage.getBoundingClientRect();
@@ -1380,25 +1345,53 @@ function dotGrid(w,h){
 function drawBackground(w,h){
   ctx.fillStyle='#F7F4EE'; ctx.fillRect(0,0,w,h);   // off white paper
   ctx.fillStyle='#CFC7B8';                          // darker shade, not black
-  ctx.fill(dotGrid(w,h));
+  /* The lattice rides the pan - without that, panning empty paper looks like
+     nothing happening at all. It stays ONE cached Path2D however far you have
+     panned: the grid is built a step bigger each way and offset by the pan
+     modulo the step, so the same path tiles seamlessly. */
+  ctx.save();
+  ctx.translate(mod(panX,DOT_STEP)-DOT_STEP, mod(panY,DOT_STEP)-DOT_STEP);
+  ctx.fill(dotGrid(w+2*DOT_STEP, h+2*DOT_STEP));
+  ctx.restore();
+}
+
+/* Two reference lines through the stage, in the drawing's own coordinates so
+   they pan with the artwork: a vertical one down the middle to centre a figure
+   on, and a horizontal one near the bottom to stand it on - the ground line a
+   walk cycle is drawn against. Same colour as the dots, so they read as paper
+   rather than as something drawn. */
+const GROUND_FRAC = 0.86;
+/* ...and it has to clear the animation bar, which floats over the bottom of the
+   stage and is exactly where 86% of a tall stage lands - the line was there and
+   simply could not be seen. The bar's height is not fixed (it wraps), so it is
+   measured rather than guessed. */
+function groundY(h){
+  const bar=document.getElementById('animbar');
+  const bh=(bar && !bar.classList.contains('hidden')) ? bar.offsetHeight+30 : 40;
+  return Math.round(Math.min(h*GROUND_FRAC, h-bh));
+}
+function drawGuides(w,h){
+  ctx.save();
+  ctx.strokeStyle='#CFC7B8'; ctx.lineWidth=1;
+  const gx=Math.round(w/2)+0.5, gy=groundY(h)+0.5, far=4000;
+  ctx.beginPath();
+  ctx.moveTo(gx,-far); ctx.lineTo(gx,h+far);
+  ctx.moveTo(-far,gy); ctx.lineTo(w+far,gy);
+  ctx.stroke();
+  ctx.restore();
 }
 
 /* The light axis, given as two corners of the shape's box in 0..1 fractions.
    Lit corner -> dark corner. Change these two lines to re-aim the light. */
 let LIGHT_FROM = {x:1, y:0};      // top right
 let LIGHT_TO   = {x:0, y:1};      // bottom left
-function lightAxis(b){
-  const A={x:b.x0+LIGHT_FROM.x*b.w, y:b.y0+LIGHT_FROM.y*b.h};
-  const B={x:b.x0+LIGHT_TO.x*b.w,   y:b.y0+LIGHT_TO.y*b.h};
-  const dx=B.x-A.x, dy=B.y-A.y, L=Math.hypot(dx,dy)||1;
-  return {A:A, B:B, d:{x:dx/L, y:dy/L}, L:L};
-}
+function lightAxis(b){ return DT.lightAxis(b, LIGHT_FROM, LIGHT_TO); }
 
 /* Two colours only. TERMINATOR is where the light stops, SOFTNESS how abruptly
    - keep it small and the falloff stays crisp instead of smearing a wash of
    midtones through the middle of the shape. */
-const TERMINATOR = 0.62;
-const SOFTNESS   = 0.04;
+const TERMINATOR = DT.TERMINATOR;
+const SOFTNESS   = DT.SOFTNESS;
 
 /* The terminator is an ARC, not a straight cut - a curved edge is what reads as
    a rounded form. The light is a point sitting off the lit side, back along the
@@ -1406,74 +1399,25 @@ const SOFTNESS   = 0.04;
    small = tightly curved and wraps round the side, large = flattens to a line.
    Wherever the light sits, the arc is made to pass through the same point the
    straight version would have, so moving it changes the curve and not the tone. */
-const LIGHT_DIST = 0.7;
-function terminatorArc(b){
-  const ax   = lightAxis(b);
-  const diag = Math.hypot(b.w,b.h)||1;
-  const L    = {x:b.cx-ax.d.x*diag*LIGHT_DIST, y:b.cy-ax.d.y*diag*LIGHT_DIST};
-  const Q    = {x:ax.A.x+ax.d.x*ax.L*TERMINATOR, y:ax.A.y+ax.d.y*ax.L*TERMINATOR};
-  return {L:L, R:dist(L,Q)};
-}
+const LIGHT_DIST = DT.LIGHT_DIST;
+function terminatorArc(b){ return DT.terminatorArc(b, LIGHT_FROM, LIGHT_TO); }
 
-function fillStyleFor(b,s){
-  const t=terminatorArc(b);
-  const g=ctx.createRadialGradient(t.L.x,t.L.y,0, t.L.x,t.L.y, t.R/TERMINATOR);
-  g.addColorStop(0, paint(s.colors.fill));
-  g.addColorStop(Math.max(0,TERMINATOR-SOFTNESS), paint(s.colors.fill));
-  g.addColorStop(Math.min(1,TERMINATOR+SOFTNESS), paint(s.colors.shadow));
-  g.addColorStop(1, paint(s.colors.shadow));
-  return g;
-}
+function fillStyleFor(b,s){ return DT.fillStyleFor(ctx, EDOC, b, s); }
 
 /* Engraver's shading: flat fill, then ONE band of 45-degree hatch lines at a
    single weight - the same one tone the gradient mode gives, just drawn as
    line texture. The band is clipped to the far side of the same terminator arc
    the gradient uses, so both modes break on exactly the same curve. */
-const HATCH_GAP    = 5.5;     // fixed, so the texture reads the same on every shape
-const HATCH_WEIGHT = 0.5;     // share of the gap each line fills
-function hatchShade(b,s){
-  const diag = Math.hypot(b.w,b.h) || 1;
-  if(diag<36) return;                               // too small to read as texture
-  const hd  = {x:Math.SQRT1_2, y:Math.SQRT1_2};     // hatch lines, fixed 45 degrees
-  const hs  = {x:Math.SQRT1_2, y:-Math.SQRT1_2};    // and the direction we step them
-
-  // only step across the span the box actually occupies
-  let k0=1e9, k1=-1e9;
-  [[b.x0,b.y0],[b.x1,b.y0],[b.x1,b.y1],[b.x0,b.y1]].forEach(function(p){
-    const k=(p[0]-b.cx)*hs.x+(p[1]-b.cy)*hs.y;
-    if(k<k0)k0=k; if(k>k1)k1=k;
-  });
-
-  const t=terminatorArc(b);
-  ctx.save();
-  ctx.beginPath();                                  // everything beyond the arc
-  ctx.rect(b.x0-diag, b.y0-diag, b.w+diag*2, b.h+diag*2);
-  ctx.moveTo(t.L.x+t.R, t.L.y);
-  ctx.arc(t.L.x, t.L.y, t.R, 0, TAU);
-  ctx.clip('evenodd');
-
-  ctx.strokeStyle=s.colors.shadow; ctx.lineCap='butt';
-  ctx.lineWidth=HATCH_GAP*HATCH_WEIGHT;
-  for(let k=k0-HATCH_GAP; k<=k1+HATCH_GAP; k+=HATCH_GAP){
-    const cx=b.cx+hs.x*k, cy=b.cy+hs.y*k;
-    ctx.beginPath();
-    ctx.moveTo(cx-hd.x*diag, cy-hd.y*diag);
-    ctx.lineTo(cx+hd.x*diag, cy+hd.y*diag);
-    ctx.stroke();
-  }
-  ctx.restore();
-}
+const HATCH_GAP    = DT.HATCH_GAP;     // fixed, so the texture reads the same on every shape
+const HATCH_WEIGHT = DT.HATCH_WEIGHT;  // share of the gap each line fills
+function hatchShade(b,s){ return DT.hatchShade(ctx, EDOC, b, s); }
 
 /* Which frame of a reference to draw. Pinned by default - an eye sheet is a set
    of expressions a game swaps between, not something that plays on its own - but
    an instance can be set to FOLLOW, and then it walks in step with whatever
    frame the parent is showing, wrapping when it is the shorter of the two. */
-function refFrames(lib){ return (lib.views||{})[Object.keys(lib.views||{})[0]] || []; }
-function refFrameIndex(rf,lib,pframe){
-  const frames=refFrames(lib), n=frames.length||1;
-  if(rf.follow) return ((pframe||0)%n+n)%n;
-  return Math.max(0,Math.min(n-1, rf.frame||0));
-}
+function refFrames(lib){ return DT.refFrames(lib); }
+function refFrameIndex(rf,lib,pframe){ return DT.refFrameIndex(rf,lib,pframe); }
 
 /* An imported drawing. Draw its frame through the reference's own transform,
    which makes it a STAMP rather than a re-lit shape: the sub-shapes' light axis
@@ -1485,75 +1429,9 @@ function refFrameIndex(rf,lib,pframe){
    An item may import another item, so a sub-shape can itself be a reference and
    this recurses through drawShape. depth is the only thing stopping it: a cycle
    is reachable once two items reference each other. */
-function drawRefShape(s,opts){
-  const o = opts||{};
-  const depth = o.depth||0;
-  if(depth>=REF_MAX_DEPTH) return;
-  const lib = refLib.get(s.ref.key);
-  if(!lib) return;
-  // REST_F is not a frame of anything - "follow" still means the frame you are on
-  const ff = (o.pframe==null || o.pframe<0) ? frame : o.pframe;
-  const fi = refFrameIndex(s.ref, lib, ff);
-  const fr = refFrames(lib)[fi];
-  if(!fr || !fr.length) return;
-  ctx.save();
-  // A reference binds to one bone and moves rigidly - see posedPlacement.
-  const pl = posedPlacement(s, o.pframe, o.pview);
-  ctx.translate(pl.x,pl.y); ctx.rotate(pl.rot); ctx.scale(pl.sx,pl.sy);
-  // opts is forwarded near-verbatim: drawShape ASSIGNS globalAlpha rather than
-  // multiplying it, so an alpha set out here would be thrown away and the
-  // onion skin would draw an imported drawing at full strength. Only depth and
-  // the parent frame change on the way down - a nested reference follows the
-  // frame of the reference holding it, not the document's.
-  const sub = {ghost:o.ghost, depth:depth+1, pframe:fi};
-  for(const x of fr) drawShape(x,sub);
-  ctx.restore();
-}
+function drawRefShape(s,opts){ return DT.drawRefShape(ctx, EDOC, s, opts); }
 
-function drawShape(s,opts){
-  if(s.ref){ drawRefShape(s,opts); return; }
-  const ghost = opts && opts.ghost;
-  /* The frame is passed through so the onion of frame n-1 is deformed by frame
-     n-1's pose, and the other view by the current one. Without it both would
-     be posed by whichever frame happens to be showing - and the VIEW with it,
-     since each view now has a rest skeleton of its own to be posed against. */
-  const wp = worldPts(s, opts && opts.pframe, opts && opts.pview);
-  if(wp.length<3) return;
-  const b = bbox(wp);
-  const closed = s.closed!==false;
-  const hatching = shading==='hatch' && !ghost;
-
-  ctx.save();
-  if(ghost) ctx.globalAlpha=0.13;
-
-  buildFill(ctx,wp,closed);                     // the fill closes whether the outline does or not
-
-  // One layer of shading and no more. There used to be a soft contact shadow
-  // cast outside each shape, which landed on whatever sat underneath and gave
-  // those shapes a second, darker band on top of their own shading.
-  // NONE in a slot switches that part off. Fill and shadow are independent:
-  // no fill leaves the silhouette see-through, no shadow leaves it flat.
-  const noFill=s.colors.fill===NONE, noShadow=s.colors.shadow===NONE;
-  if(hatching || noShadow){
-    if(!noFill){ ctx.fillStyle=s.colors.fill; ctx.fill(); }
-  }else{
-    ctx.fillStyle=fillStyleFor(b,s); ctx.fill();
-  }
-
-  if(hatching && !noShadow){                    // hatch inside the silhouette
-    ctx.save(); ctx.clip(); hatchShade(b,s); ctx.restore();
-  }
-
-  // hatchShade tramples the current path, so rebuild before stroking
-  if(s.colors.outline!==NONE){
-    if(closed) buildPath(ctx,wp); else buildOpenPath(ctx,wp);
-    ctx.lineJoin='round';
-    ctx.lineCap = closed ? 'round' : 'butt';    // butt: the outline stops flush with the chord
-    ctx.strokeStyle=s.colors.outline; ctx.lineWidth=s.lw;
-    ctx.stroke();
-  }
-  ctx.restore();
-}
+function drawShape(s,opts){ return DT.drawShape(ctx, EDOC, s, opts); }
 
 /* selection chrome for the Hand */
 function rawCorners(s){
@@ -1731,12 +1609,21 @@ function drawSelection(s,opts){
    Memoised, because it walks every shape's worldPts and the render loop is
    always in flight. */
 const SPLIT_GAP = 70;
-let splitCache = {key:'', dx:0};
-function splitDX(){
-  if(!(boneMode && boneTool==='bskin' && skinSplit && rig.length)) return 0;
+const SPLIT0 = {key:'', art:0, rig:0};
+let splitCache = {key:'', art:0, rig:0};
+const splitOn = () => !!(boneMode && boneTool==='bskin' && skinSplit && rig.length);
+/* The two offsets: the artwork's and the rig's. They used to be one number used
+   as -dx and +dx, which splits the pair about wherever the drawing HAPPENS to
+   sit - so a figure drawn off to one side took its own column clean off the
+   stage and there was no way to reach it, since there was no pan either. The
+   pair is CENTRED on the canvas now, which is the same two columns and the same
+   gap, only placed where they can both be seen. */
+function splitPair(){
+  if(!splitOn()) return SPLIT0;
   const list=cur();
-  const key=view+'|'+frame+'|'+rigRev+'|'+bindRev+'|'+list.length;
-  if(splitCache.key===key) return splitCache.dx;
+  const CW=cv.width/dpr;
+  const key=view+'|'+frame+'|'+rigRev+'|'+bindRev+'|'+list.length+'|'+Math.round(CW);
+  if(splitCache.key===key) return splitCache;
   let x0=1e9,x1=-1e9;
   for(const s of list){ const b=bbox(worldPts(s)); x0=Math.min(x0,b.x0); x1=Math.max(x1,b.x1); }
   const W=boneWorld(rigPose(), view);
@@ -1745,14 +1632,22 @@ function splitDX(){
     const t=boneTip(w);
     x0=Math.min(x0,w.x,t.x); x1=Math.max(x1,w.x,t.x);
   }
-  const dx = x1>x0 ? (x1-x0)/2 + SPLIT_GAP/2 : 0;
-  splitCache={key:key, dx:dx};
-  return dx;
+  const half  = x1>x0 ? (x1-x0)/2 + SPLIT_GAP/2 : 0;
+  const shift = x1>x0 ? CW/2 - (x0+x1)/2 : 0;
+  splitCache={key:key, art:shift-half, rig:shift+half};
+  return splitCache;
 }
+const splitArt = () => splitPair().art;    // added to the ARTWORK when it is drawn
+const splitRig = () => splitPair().rig;    // ...and to the rig
+function splitDX(){ return splitPair().rig; }
 /* A shape the "Hide attached shapes" toggle is currently keeping off screen.
    It is hidden from the HIT TEST as well, or you would keep selecting things
    you cannot see. */
-const skinHidden = s => skinHideBound && boneMode && boneTool==='bskin' && !!skinOf(s);
+/* ...or one you have hidden by hand, which is the way to get an outline out of
+   the way of the limb underneath it. Both are the Skinning tool's alone: the
+   flag stays on the shape, but nothing outside that tool reads it. */
+const skinHidden = s => boneMode && boneTool==='bskin' &&
+                        (!!s.hidden || (skinHideBound && !!skinOf(s)));
 
 function drawFrame(){
   // self-heal the backing size: the palette panel opening changes the stage width
@@ -1762,11 +1657,16 @@ function drawFrame(){
 
   syncChrome();
 
+  ctx.save();
+  if(panX||panY) ctx.translate(panX,panY);
+  drawGuides(w,h);
+
   /* Everything from here to the matching restore is the ARTWORK, and in the
      Skinning split view it is drawn a column to the left of where it lives.
      The rig gets the same offset the other way, in drawBones. */
-  const SD=splitDX();
-  if(SD){ ctx.save(); ctx.translate(-SD,0); }
+  const SD=splitArt();
+  ctx.save();
+  if(SD) ctx.translate(SD,0);
   drawEditBackdrop();
 
   /* Two onions, and they are independent. The VIEW onion is how you trace a
@@ -1781,8 +1681,19 @@ function drawFrame(){
     const ok = view===viewNames[0] ? viewNames[1] : viewNames[0];
     for(const s of (views[ok]||[])[frame]||[]) drawShape(s,{ghost:true, pview:ok, pframe:RF});
   }
-  if(onionFrame && frame>0)
-    for(const s of (views[view]||[])[frame-1]||[]) drawShape(s,{ghost:true, pframe:RF});
+  /* Both neighbours, so a frame can be drawn between the two it has to sit
+     between. On a LOOPING animation the ends are neighbours in a cycle, so it
+     wraps: standing on frame 0 ghosts the last frame behind you. Two frames is
+     the degenerate case - wrapping there would draw the other frame twice, at
+     twice the alpha - so it is left alone. */
+  if(onionFrame){
+    const nf=frameCount(), wrap=!!curAnim().loop && nf>2;
+    for(const d of [-1,1]){
+      let f=frame+d;
+      if(f<0 || f>nf-1){ if(!wrap) continue; f=(f+nf)%nf; }
+      for(const s of (views[view]||[])[f]||[]) drawShape(s,{ghost:true, pframe:RF});
+    }
+  }
   /* While you are rigging, the artwork is context rather than the subject - it
      goes grey exactly as an onion does. The Skinning tool is the exception: you
      are picking shapes with it, so they have to be legible. */
@@ -1791,7 +1702,7 @@ function drawFrame(){
     if(skinHidden(s)) continue;
     drawShape(s, rigging ? {pframe:RF, ghost:true} : {pframe:RF});
   }
-  if(SD) ctx.restore();
+  ctx.restore();
 
   if(drawing && drawing.pts.length>1){       // live brush stroke
     ctx.save();
@@ -1892,6 +1803,7 @@ function drawFrame(){
   // Bones last: they are drawn on top of the artwork, and while it is playing
   // the canvas is a viewer, so the rig goes away with the rest of the chrome.
   if(!playing){ drawSkinOverlay(); drawBones(); drawIKTargets(); }
+  ctx.restore();                                   // ...and the pan closes here
 }
 
 /* ONE driver, and one only.
@@ -1918,33 +1830,10 @@ function drawFrame(){
 /* `pose` is a map of DELTAS and `v` names the view whose REST they are deltas
    from. boneWorld({}, v) is therefore that view's rest skeleton, which is what
    Add Bones, Edit Bones and the skin weights all resolve against. */
-function boneWorld(pose,v){
-  const R=restAt(v), M=new Map();
-  for(const b of rig){
-    const r=R[b.id] || REST0, d=pose[b.id] || null;
-    const lrot=(r.rot||0) + mirOf(r)*((d&&d.drot)||0);
-    const len =(r.len||0) * ((d&&d.klen!=null)?d.klen:1);
-    let x,y,rot;
-    const pw = b.parent!=null ? M.get(b.parent) : null;
-    if(!pw){                                       // root, or an orphan treated as one
-      x=(r.x||0) + sgnX(r)*((d&&d.dx)||0);
-      y=(r.y||0) + sgnY(r)*((d&&d.dy)||0);
-      rot=lrot;
-    }
-    else{
-      // along the parent, then perpendicular to it, both in the parent's frame
-      const t=(r.att==null?1:r.att)*pw.len, o=r.off||0;
-      const c=Math.cos(pw.rot), n=Math.sin(pw.rot);
-      x=pw.x + c*t - n*o;  y=pw.y + n*t + c*o;
-      rot=pw.rot+lrot;
-    }
-    M.set(b.id,{x:x,y:y,rot:rot,len:len});
-  }
-  return M;
-}
-const boneTip = w => ({x:w.x+Math.cos(w.rot)*w.len, y:w.y+Math.sin(w.rot)*w.len});
+function boneWorld(pose,v){ return DT.boneWorld(EDOC, pose, v); }
+const boneTip = DT.boneTip;
 /* Where a child hanging off `att` of this bone starts. */
-const boneAt  = (w,t) => ({x:w.x+Math.cos(w.rot)*w.len*t, y:w.y+Math.sin(w.rot)*w.len*t});
+const boneAt  = DT.boneAt;
 
 /* Pick radius for a bone's end circles, capped against the bone the same way
    pickR caps a shape's handles - a short bone would otherwise be all handle. */
@@ -1987,7 +1876,7 @@ function drawBones(){
   const W=boneWorld(rigPose(), view);
   ctx.save();
   // the split view's other half: the artwork went left, the rig goes right
-  const SD=splitDX(); if(SD) ctx.translate(SD,0);
+  const SD=splitRig(); if(SD) ctx.translate(SD,0);
   ctx.lineCap='round'; ctx.lineJoin='round';
   /* In the Skinning tool the artwork is the subject, so the rig steps back -
      unless it has been split off to the side, where it is a column of its own
@@ -2200,7 +2089,7 @@ function drawIKTargets(){
   if(!rigVisible() || rigAtRest() || !rig.some(b=>b.ikt)) return;
   const pose=rigPose(), W=boneWorld(pose,view);
   ctx.save();
-  const SD=splitDX(); if(SD) ctx.translate(SD,0);
+  const SD=splitRig(); if(SD) ctx.translate(SD,0);
   ctx.lineCap='round'; ctx.lineJoin='round';
   for(const b of rig){
     if(!b.ikt) continue;
@@ -2338,8 +2227,19 @@ function outlineNear(w,tol){
 /* =============================================================== events */
 function pos(e){
   const r=cv.getBoundingClientRect();
-  return {x:e.clientX-r.left, y:e.clientY-r.top};
+  return {x:e.clientX-r.left-panX, y:e.clientY-r.top-panY};
 }
+/* The middle button pans, and Ctrl+drag does the same thing for a mouse that
+   has no third button. It is above every tool and above the playing guard -
+   moving the paper is not an edit - and it works off RAW client coordinates,
+   since pos() is what it is setting. */
+function panDown(e){
+  e.preventDefault();
+  try{ cv.setPointerCapture(e.pointerId); }catch(err){}
+  pan={x:e.clientX-panX, y:e.clientY-panY};
+}
+cv.addEventListener('auxclick',e=>e.preventDefault());
+cv.addEventListener('contextmenu',e=>{ if(e.ctrlKey) e.preventDefault(); });
 
 cv.addEventListener('pointerdown',e=>{
   /* A sidebar text field that is still focused has to be COMMITTED before
@@ -2353,6 +2253,7 @@ cv.addEventListener('pointerdown',e=>{
   // While it is playing the canvas is a viewer, not an editor: the frame under
   // the cursor changes twelve times a second, so any gesture would land on
   // whichever frame happened to be up when you let go.
+  if(e.button===1 || e.ctrlKey){ panDown(e); return; }
   if(playing) return;
   cv.setPointerCapture(e.pointerId);
   const w=pos(e); mouse.down=true; mouse.x=w.x; mouse.y=w.y;
@@ -2531,6 +2432,7 @@ cv.addEventListener('pointerdown',e=>{
 });
 
 cv.addEventListener('pointermove',e=>{
+  if(pan){ panX=e.clientX-pan.x; panY=e.clientY-pan.y; return; }
   const w=pos(e); mouse.x=w.x; mouse.y=w.y;
 
   if(boneMode || boneGesture){ bonePointerMove(w); return; }
@@ -2613,6 +2515,7 @@ cv.addEventListener('pointermove',e=>{
 });
 
 function endStroke(){
+  if(pan){ pan=null; mouse.down=false; return; }
   if(boneMode || boneGesture){ bonePointerUp(); mouse.down=false; return; }
   if(carve && carve.mode==='smear')
     for(const s of carve.shapes) smearPolish(s, carve.polish.get(s));
@@ -2648,20 +2551,7 @@ cv.addEventListener('pointercancel',endStroke);
 cv.addEventListener('pointerleave',()=>{ if(!mouse.down){ mouse.x=-999; mouse.y=-999; } });
 
 /* ================================================================ brush */
-function laplacian(pts,amount,passes,closed){
-  let p=pts.map(q=>({x:q.x,y:q.y}));
-  for(let k=0;k<passes;k++){
-    const n=p.length, out=p.map(q=>({x:q.x,y:q.y}));
-    for(let i=0;i<n;i++){
-      if(!closed && (i===0 || i===n-1)) continue;   // endpoints of an open run stay put
-      const a=p[(i-1+n)%n], b=p[(i+1)%n];
-      out[i]={ x:p[i].x+((a.x+b.x)/2-p[i].x)*amount,
-               y:p[i].y+((a.y+b.y)/2-p[i].y)*amount };
-    }
-    p=out;
-  }
-  return p;
-}
+function laplacian(pts,amount,passes,closed){ return DT.laplacian(pts,amount,passes,closed); }
 
 function finishBrush(raw){
   if(raw.length<4) return;
@@ -2953,15 +2843,7 @@ function untangle(s, touched, closed){
 }
 
 /* Where two segments cross, or null. */
-function segCross(a,b,c,d){
-  const rx=b.x-a.x, ry=b.y-a.y, sx2=d.x-c.x, sy2=d.y-c.y;
-  const den=rx*sy2-ry*sx2;
-  if(Math.abs(den)<1e-9) return null;
-  const t=((c.x-a.x)*sy2-(c.y-a.y)*sx2)/den;
-  const u=((c.x-a.x)*ry-(c.y-a.y)*rx)/den;
-  if(t<=0||t>=1||u<=0||u>=1) return null;
-  return {x:a.x+rx*t, y:a.y+ry*t};
-}
+function segCross(a,b,c,d){ return DT.segCross(a,b,c,d); }
 
 /* One tidy-up over everything the stroke touched, once the pointer is up. The
    little hooks a smear leaves where the disc first crossed the outline are too
@@ -3030,12 +2912,7 @@ function stopCrossings(pts, touched, before, closed, guard){
   }
 }
 
-function segDist(p,a,b){
-  const vx=b.x-a.x, vy=b.y-a.y, L=vx*vx+vy*vy;
-  let t = L ? ((p.x-a.x)*vx+(p.y-a.y)*vy)/L : 0;
-  t = t<0?0:t>1?1:t;
-  return Math.hypot(p.x-(a.x+vx*t), p.y-(a.y+vy*t));
-}
+function segDist(p,a,b){ return DT.segDist(p,a,b); }
 
 /* Dragging one stretch of outline a long way leaves a huge gap between the last
    point it moved and the first it did not - a dead straight stretch with nothing
@@ -3481,6 +3358,13 @@ function syncBonePanel(){
     }
   }
 
+  {
+    // nothing to bake when this frame IS the rest
+    const flat = !rig.length || rig.every(x=>boneAtRest(x,frame));
+    document.getElementById('btnPoseRest') .disabled = flat;
+    document.getElementById('btnResetPose').disabled = flat;
+  }
+
   const b = selBone!=null ? boneById(selBone) : null;
   document.getElementById('boneSec')  .classList.toggle('hidden',!b);
   document.getElementById('boneEmpty').classList.toggle('hidden',!!b);
@@ -3827,6 +3711,35 @@ function resetBone(){
   enforceIKTargets(b.id);         // this bone held, every other goal honoured
   syncPalette(); render();
 }
+/* The other direction: take the pose you have built in THIS frame and make it
+   the rest skeleton, leaving the drawing exactly where it is on screen.
+
+   The pose is a delta from the rest and the rest is PER VIEW, so this cannot
+   simply write the front view's posed numbers in and zero the delta - the back
+   view, whose own rest never moved, would jump the moment its delta went to
+   zero. Each view therefore absorbs ITS OWN posed value (its own mirror sense
+   included), and only then is the one shared delta zeroed. Both views come out
+   pixel-identical; every OTHER frame moves, which is the whole point - they are
+   deltas from a rest that has changed. */
+function poseAsRest(){
+  if(!rig.length) return;
+  const p=poseAt(frame);
+  if(rig.every(b=>boneAtRest(b,frame))) return;
+  pushUndo();
+  for(const n of viewNames){
+    const R=restAt(n), next=new Map();
+    for(const b of rig){
+      const r=restBone(b.id,n);
+      const v={...r, rot:localRotOf(p,b.id,n), len:boneLenOf(p,b.id,n)};
+      if(b.parent==null){ const rp=rootPosOf(p,b.id,n); v.x=rp.x; v.y=rp.y; }
+      next.set(b.id, v);
+    }
+    for(const b of rig) R[b.id]=next.get(b.id);
+  }
+  for(const b of rig) zeroDelta(p, b.id);
+  bumpBind();                       // the bind moved, so the weights are stale too
+  syncPalette(); render();
+}
 function resetPose(){
   if(!rig.length) return;
   pushUndo();
@@ -3935,6 +3848,7 @@ function ikTargetDown(w,b){
   syncPalette(); render();
 }
 function boneHandDown(w,hit,W){
+  /* reassigned below when the selected bone's own tip claims the press */
   /* The scale handles first, and they belong to the SELECTED bone alone - they
      stand outside its box, so nothing else can want that spot. */
   if(selBone!=null && boneById(selBone)){
@@ -3948,6 +3862,15 @@ function boneHandDown(w,hit,W){
         syncPalette(); render(); return;
       }
     }
+  }
+  /* The SELECTED bone's own tip wins over everything, exactly as Edit Bones'
+     knobs do. boneHit scans rig in reverse and hands back the CHILD at a shared
+     joint - so a root whose child sits on its tip (every humanoid's pelvis) had
+     no reachable tip at all, and its body drag is a translate: the root could
+     be moved and never ROTATED. */
+  if(selBone!=null){
+    const sw=W.get(selBone);
+    if(sw && dist(boneTip(sw),w) < boneR(sw)+3) hit={bone:boneById(selBone), part:'tip', t:1};
   }
   if(!hit){ selBone=null; boneGesture=null; syncPalette(); render(); return; }
   selBone=hit.bone.id;
@@ -4187,8 +4110,8 @@ function boneSkinDown(w,hit,e){
     syncPalette(); render(); return;
   }
   // knobsOnly above means the bones no longer swallow a press over a small limb
-  const SD=splitDX();                 // the artwork is drawn a column to the LEFT
-  const s=shapeAt(SD?{x:w.x+SD,y:w.y}:w);
+  const SD=splitArt();                // the artwork is drawn a column to one side
+  const s=shapeAt(SD?{x:w.x-SD,y:w.y}:w);
   if(s){
     const add = !!(e && e.shiftKey);
     if(add){
@@ -4210,7 +4133,7 @@ function boneSkinDown(w,hit,e){
        a whole limb's worth of shapes one gesture rather than a shift-click each.
        The box is in screen space; splitDX() carries it back (see finishMarquee). */
     if(!e || !e.shiftKey) clearSel();
-    marquee={x0:w.x, y0:w.y, x1:w.x, y1:w.y, add:!!(e&&e.shiftKey), dx:SD};
+    marquee={x0:w.x, y0:w.y, x1:w.x, y1:w.y, add:!!(e&&e.shiftKey), dx:-SD};
   }
   syncPalette(); render();
 }
@@ -4268,7 +4191,7 @@ function attachToBone(){
   bumpBind(); syncPalette(); render();
 }
 function bindToSkeleton(){
-  const g=selGroup();
+  const g=selGroup().filter(s=>!skinHidden(s));
   if(!g.length || !rig.length) return;
   pushUndo();
   const B=boneWorld({},view);
@@ -4354,7 +4277,7 @@ function syncSkinPanel(){
 
   /* The hint depends on the split, which syncBonePanel does not know about:
      with the columns apart a bone takes a press anywhere along it. */
-  if(splitDX()) document.getElementById('boneHint').textContent =
+  if(splitOn()) document.getElementById('boneHint').textContent =
     'The artwork is on the left and the skeleton on the right. Click shapes on one side and bones - anywhere along them - on the other, then Attach.';
 
   const split=document.getElementById('skinSplit');
@@ -4364,8 +4287,15 @@ function syncSkinPanel(){
   hb.textContent = skinHideBound ? 'Show attached shapes' : 'Hide attached shapes';
   hb.classList.toggle('on', skinHideBound);
 
+  const nHid=cur().filter(s=>s.hidden).length;
+  document.getElementById('btnHideShape').disabled = !g.length;
+  const sa=document.getElementById('btnShowAll');
+  sa.disabled=!nHid;
+  sa.textContent = nHid ? 'Show '+nHid+' hidden' : 'Show all';
+
   const note=document.getElementById('skinNote');
-  const hidden = skinHideBound ? ' '+cur().filter(s=>skinOf(s)).length+' attached shape(s) hidden.' : '';
+  const hidden = (skinHideBound ? ' '+cur().filter(s=>skinOf(s)).length+' attached shape(s) hidden.' : '')+
+                 (nHid ? ' '+nHid+' shape(s) hidden by hand - Auto-Attach skips them.' : '');
   note.textContent = (
     !rig.length ? 'Draw some bones first.' :
     !g.length   ? (b ? 'Nothing skinned to "'+boneLabel(b)+'" yet. Click shapes to select them.'
@@ -4376,13 +4306,33 @@ function syncSkinPanel(){
   )+hidden;
 }
 function setSkinSplit(on){
-  skinSplit=!!on; splitCache={key:'',dx:0};
+  skinSplit=!!on; splitCache={key:'',art:0,rig:0};
   clearSel();                 // the columns move, and a box drawn round the old
   syncPalette(); render();    // position of a shape reads as a bug
 }
 function setHideBound(on){
   skinHideBound=!!on;
   if(skinHideBound) for(const s of selGroup().slice()) if(skinOf(s)) dropFromSel(s);
+  syncPalette(); render();
+}
+/* Hiding is per shape and it is an ordinary undoable edit - the flag lives on
+   the shape, so snapshot() carries it with nothing extra written. A hidden
+   shape leaves the selection with it: it is out of the hit test as well as out
+   of the paint, and a selection box drawn round something invisible reads as a
+   bug. */
+function hideSelectedShapes(){
+  const g=selGroup().filter(s=>!s.hidden);
+  if(!g.length) return;
+  pushUndo();
+  for(const s of g) s.hidden=true;
+  clearSel();
+  syncPalette(); render();
+}
+function showAllShapes(){
+  const g=cur().filter(s=>s.hidden);
+  if(!g.length) return;
+  pushUndo();
+  for(const s of g) delete s.hidden;
   syncPalette(); render();
 }
 
@@ -4399,9 +4349,9 @@ function drawSkinOverlay(){
   /* The whole overlay is artwork-side, so it takes the artwork's offset. The
      one exception is the tether, whose far end is on a bone - and the rig is a
      column the other way, hence the 2*SD below. */
-  const SD=splitDX();
+  const SD=splitArt(), TETHER=splitRig()-SD;
   ctx.save();
-  if(SD) ctx.translate(-SD,0);
+  if(SD) ctx.translate(SD,0);
   ctx.setLineDash([6,5]); ctx.lineWidth=1.5; ctx.strokeStyle='#6ea8ff';
   for(const g of selGroup()){
     if(skinHidden(g)) continue;
@@ -4413,7 +4363,7 @@ function drawSkinOverlay(){
   if(!rig.length) return;
   const W=boneWorld(poseAt(frame));
   ctx.save();
-  if(SD) ctx.translate(-SD,0);
+  if(SD) ctx.translate(SD,0);
   for(const s of cur()){
     const sk=skinOf(s); if(!sk || skinHidden(s)) continue;
     const wp=worldPts(s), ws=skinWeights(s);
@@ -4431,7 +4381,7 @@ function drawSkinOverlay(){
     const c=bbox(wp), w0=W.get(sk.bones[0]);
     if(w0){
       const m=boneAt(w0,0.5);
-      ctx.beginPath(); ctx.moveTo(c.cx,c.cy); ctx.lineTo(m.x+2*SD,m.y);
+      ctx.beginPath(); ctx.moveTo(c.cx,c.cy); ctx.lineTo(m.x+TETHER,m.y);
       ctx.setLineDash([2,4]); ctx.lineWidth=1;
       ctx.strokeStyle='hsla('+boneHue(sk.bones[0])+',70%,45%,.5)';
       ctx.stroke(); ctx.setLineDash([]);
@@ -4442,6 +4392,8 @@ function drawSkinOverlay(){
 
 document.getElementById('skinSplit').addEventListener('change',e=>setSkinSplit(e.target.checked));
 document.getElementById('btnHideBound').addEventListener('click',()=>setHideBound(!skinHideBound));
+document.getElementById('btnHideShape').addEventListener('click',hideSelectedShapes);
+document.getElementById('btnShowAll')  .addEventListener('click',showAllShapes);
 document.getElementById('skinBone').addEventListener('change',e=>{
   const id=e.target.value===''?null:+e.target.value;
   selBone = (id!=null && boneById(id)) ? id : null;
@@ -4471,8 +4423,8 @@ function bonePointerDown(w,e){
      so the cursor has to be brought back before it is tested against it - and
      with the columns apart nothing is underneath a bone any more, so it takes a
      press along its whole body again rather than only on its end circles. */
-  const SD=splitDX();
-  const hit=boneHit(W, SD?{x:w.x-SD,y:w.y}:w, boneTool==='bskin' && !SD);
+  const SD=splitRig();
+  const hit=boneHit(W, SD?{x:w.x-SD,y:w.y}:w, boneTool==='bskin' && !splitOn());
   if(boneTool==='bdraw'){
     /* The PARENT is whatever is selected, not whatever you pressed on - so a
        chain draws by keeping the last bone selected and dragging again, and the
@@ -4581,6 +4533,7 @@ document.getElementById('boneFlipV').addEventListener('click',()=>flipBone(selBo
 document.getElementById('boneDel') .addEventListener('click',()=>deleteBone(selBone));
 document.getElementById('btnHumanoid') .addEventListener('click',addHumanoid);
 document.getElementById('btnResetPose').addEventListener('click',resetPose);
+document.getElementById('btnPoseRest') .addEventListener('click',poseAsRest);
 document.getElementById('btnRigCopy') .addEventListener('click',()=>copyRigTo(false));
 document.getElementById('btnRigCopyM').addEventListener('click',()=>copyRigTo(true));
 
@@ -4603,16 +4556,11 @@ document.getElementById('btnRigCopyM').addEventListener('click',()=>copyRigTo(tr
    re-stringified by snapshot() on every gesture, sixty deep in each of two
    stacks - the same argument that keeps refLib out of a snapshot. */
 
-const SKIN_EPS = 1.5;      // a point sitting exactly on a bone must not divide by zero
-const SKIN_MAXB = 2;       // influences kept per point
-const MIN_BONE_K = 0.06;   // toLocal divides by sx/sy; a zero-length bone would NaN everything
+const SKIN_EPS   = DT.SKIN_EPS;
+const SKIN_MAXB  = DT.SKIN_MAXB;
+const MIN_BONE_K = DT.MIN_BONE_K;
 
-function skinOf(s){
-  if(!s || !s.skin || !s.skin.bones || !s.skin.bones.length) return null;
-  const bs=s.skin.bones.filter(id=>boneById(id)!=null);
-  if(!bs.length) return null;                 // dangling ids read as unbound
-  return { bones:bs, falloff: s.skin.falloff||0 };
-}
+function skinOf(s){ return DT.skinOf(EDOC, s); }
 
 /* D = M_pose . M_bind^-1 per bone, as a similarity:
       D(p) = o_pose + k . R(dtheta) . (p - o_bind)
@@ -4624,102 +4572,25 @@ function skinOf(s){
    f < 0 (REST_F) means "no deformation at all": the pose is a delta from the
    rest, so an empty pose IS the rest and every D comes out the identity. That is
    what Add Bones and Edit Bones draw against. */
-let _matKey='', _mats=null;
-function skinMats(f,v){
-  v = v || view;
-  const key=f+':'+v+':'+rigRev;
-  if(key===_matKey && _mats) return _mats;
-  const B=boneWorld({},v), P=boneWorld(f<0?{}:poseAt(f), v);
-  const M=new Map();
-  for(const b of rig){
-    const ob=B.get(b.id), op=P.get(b.id);
-    if(!ob||!op) continue;
-    const k = ob.len>0.0001 ? Math.max(MIN_BONE_K, op.len/ob.len) : 1;
-    const d = op.rot-ob.rot, c=Math.cos(d), n=Math.sin(d);
-    M.set(b.id,{
-      c:c, n:n, k:k,
-      tx: op.x - k*(c*ob.x - n*ob.y),
-      ty: op.y - k*(n*ob.x + c*ob.y),
-      // at rest this is the identity and worldPts can return the raw points
-      id: Math.abs(d)<1e-12 && Math.abs(k-1)<1e-12 &&
-          Math.abs(op.x-ob.x)<1e-9 && Math.abs(op.y-ob.y)<1e-9
-    });
-  }
-  _matKey=key; _mats=M;
-  return M;
-}
-const applyD = (D,p) => ({ x: D.k*(D.c*p.x - D.n*p.y) + D.tx,
-                           y: D.k*(D.n*p.x + D.c*p.y) + D.ty });
+function skinMats(f,v){ return DT.skinMats(EDOC, f, v); }
+const applyD = DT.applyD;
 
 /* Weights depend on the BIND pose and on the rig's structure, never on the
    current pose - so they are keyed on bindRev and survive a whole drag. Held in
    a WeakMap rather than on the shape: a field would be carried straight into
    sceneToJSON's stringify and into every undo snapshot. */
-const skinCache = new WeakMap();
-function skinWeights(s,v){
-  const sk=skinOf(s);
-  if(!sk) return null;
-  v = v || view;
-  // the view is in the key too: the rest they are measured against is per view
-  const key=v+':'+bindRev+':'+s.pts.length+':'+sk.bones.join(',')+':'+sk.falloff;
-  const hit=skinCache.get(s);
-  if(hit && hit.key===key) return hit.w;
-
-  const B=boneWorld({},v);
-  const segs=sk.bones.map(id=>{ const w=B.get(id); return {id:id, a:w, b:boneTip(w)}; });
-  const out=[];
-  for(const p of s.pts){
-    const wp=toWorld(s,p);                    // rest world - the frame the weights belong to
-    let ds=segs.map(g=>({id:g.id, d:Math.max(SKIN_EPS, segDist(wp,g.a,g.b))}));
-    ds.sort((x,y)=>x.d-y.d);
-    /* Inside the falloff, nearest SKIN_MAXB by inverse square. A point outside
-       every bone's falloff still gets the single nearest one: a shape that is
-       bound must stay bound, or part of it would be left behind when the rest
-       of it moved. */
-    let use=ds.filter(x=> !sk.falloff || x.d<=sk.falloff).slice(0,SKIN_MAXB);
-    if(!use.length) use=[ds[0]];
-    let tot=0; const ws=use.map(x=>{ const v=1/(x.d*x.d); tot+=v; return {b:x.id, w:v}; });
-    for(const x of ws) x.w/=tot;
-    out.push(ws);
-  }
-  skinCache.set(s,{key:key, w:out});
-  return out;
-}
+function skinWeights(s,v){ return DT.skinWeights(EDOC, s, v); }
 
 /* The one hook. NOTE the explicit second parameter: three call sites used to
    read `grp.flatMap(worldPts)`, which would hand this the ARRAY INDEX as a
    frame. They pass an arrow now. */
-function worldPts(s, f, v){
-  const raw=s.pts.map(p=>toWorld(s,p));
-  const sk=skinOf(s);
-  if(!sk || !rig.length) return raw;
-  const M=skinMats(f==null?frame:f, v);
-  let moved=false;
-  for(const id of sk.bones){ const D=M.get(id); if(D && !D.id){ moved=true; break; } }
-  if(!moved) return raw;                      // at rest, and this is the common case
-  const W=skinWeights(s, v);
-  return raw.map((p,i)=>{
-    const ws=W[i];
-    let x=0,y=0,tot=0;
-    for(const e of ws){
-      const D=M.get(e.b); if(!D) continue;
-      const q=applyD(D,p); x+=q.x*e.w; y+=q.y*e.w; tot+=e.w;
-    }
-    return tot>0 ? {x:x/tot, y:y/tot} : p;
-  });
-}
+function worldPts(s, f, v){ return DT.worldPts(EDOC, s, f, v); }
 
 /* Whether a shape is currently displaced from where it was drawn. Point editing
    writes back through toLocal, which knows nothing about any of this, so Smear,
    Eraser and the outline warp are off while it is true - Reset pose is the way
    through. */
-function deformed(s,f,v){
-  const sk=skinOf(s);
-  if(!sk) return false;
-  const M=skinMats(f==null?frame:f, v);
-  for(const id of sk.bones){ const D=M.get(id); if(D && !D.id) return true; }
-  return false;
-}
+function deformed(s,f,v){ return DT.deformed(EDOC, s, f, v); }
 const warpable = s => editable(s) && !deformed(s);
 
 /* A reference's pts are its placement box, not an outline, so it cannot be
@@ -4731,15 +4602,7 @@ const warpable = s => editable(s) && !deformed(s);
    because a uniform k commutes with R and with the diagonal S. That is the same
    argument placeRef already relies on, and it is why a negative sx from a flip
    survives: nothing here ever decomposes the shape's own matrix. */
-function posedPlacement(s,f,v){
-  const sk=skinOf(s);
-  if(!sk) return s;
-  const M=skinMats(f==null?frame:f, v);
-  const D=M.get(sk.bones[0]);
-  if(!D || D.id) return s;
-  const o=applyD(D,{x:s.x,y:s.y});
-  return { x:o.x, y:o.y, rot:s.rot+Math.atan2(D.n,D.c), sx:s.sx*D.k, sy:s.sy*D.k };
-}
+function posedPlacement(s,f,v){ return DT.posedPlacement(EDOC, s, f, v); }
 
 /* ------------------------------------------- flip, duplicate, copy, paste */
 /* Mirroring in SCREEN space, not the shape's own axes: mirror . rotate(r)
@@ -5820,8 +5683,8 @@ document.getElementById('btnExport').addEventListener('click',openExportModal);
    need lw/2; closed:false means the outline is stroked only along the drawn run
    while the fill still closes with a straight chord; a colour of "none" means
    do not render that part at all. */
-const SCENE_FORMAT  = 'charactersmith.scene';
-const SCENE_VERSION = 6;   // v6 made a document hold MANY named animations
+const SCENE_FORMAT  = DT.SCENE_FORMAT;
+const SCENE_VERSION = DT.SCENE_VERSION;   // v6 made a document hold MANY named animations
 
 function sceneToJSON(){
   stashAnim();                              // the live arrays are the current one's
@@ -5899,131 +5762,13 @@ function animsToJSON(){
   });
 }
 
-function migrateScene(o){
-  if(!o || o.format!==SCENE_FORMAT) throw new Error('Not a Drawthing scene.');
-  if(o.version>SCENE_VERSION)
-    throw new Error('This scene is version '+o.version+', the editor only reads up to '+SCENE_VERSION+'.');
-  if(o.version<2){                            // v1 knew only the two character views
-    o.kind='character';
-    o.viewOrder=['front','back'];
-    o.refs={};
-    o.version=2;
-  }
-  if(o.version<3){
-    /* v2's views held shape lists. v3's hold frames. For a character that is a
-       wrap - one frame, the drawing as it was. For an eye or a mouth sheet the
-       expression VIEWS were the frames all along, so they fold into one view in
-       the order the sheet declared them, and their old view labels become the
-       frame names. */
-    const order=(o.viewOrder||[]).slice();
-    const src=o.views||{};
-    if(o.kind==='eyes' || o.kind==='mouths'){
-      o.frameNames=(DOC_KINDS[o.kind].frameNames||order).slice();
-      o.views={ main: order.map(n=>src[n]||[]) };
-      o.viewOrder=['main'];
-      o.frameOrderV2=order;                   // so a v2 ref.pose can still be resolved
-    }else{
-      o.frameNames=null;
-      o.views={};
-      for(const n of order) o.views[n]=[ src[n]||[] ];
-    }
-    o.frameCount=Math.max(1, (o.views[o.viewOrder[0]]||[]).length);
-    const rf=o.refs||{};
-    for(const k of Object.keys(rf)) rf[k]=migrateRefEntry(rf[k]);
-    // and every shape's ref.pose (a name) becomes ref.frame (an index)
-    for(const n of o.viewOrder) for(const fr of o.views[n]||[]) for(const s of fr||[])
-      if(s && s.ref) migrateRefField(s.ref, rf[s.ref.key]);
-    (o.render||(o.render={})).fps=FPS;
-    o.version=3;
-  }
-  if(o.version<4){
-    // Nothing to fold: a v3 drawing simply has no skeleton. AFTER the v3 block,
-    // which is what settles frameCount.
-    o.bones={ rig:[], bind:{}, pose:[] };
-    o.version=4;
-  }
-  if(o.version<5){
-    /* The rest went PER VIEW and the pose became a delta from it. Every view
-       starts on the same rest with mirror sense +1, and every delta is measured
-       off the old single bind - so a v4 drawing comes out bit-identical, which
-       is the point. att/off move off the bone and into the rest, since a
-       mirrored view has to be able to hang a child on the other side. */
-    const bn = o.bones || {rig:[], bind:{}, pose:[]};
-    const rg = bn.rig || [], bind = bn.bind || {};
-    const order = o.viewOrder || ['front','back'];
-    const rest={};
-    for(const v of order){
-      const m={};
-      for(const b of rg){
-        const s0=bind[b.id]||{len:0,rot:0};
-        const e={ len:s0.len||0, rot:s0.rot||0,
-                  att:(b.att==null?1:b.att), off:b.off||0, mx:1, my:1 };
-        if(s0.x!=null){ e.x=s0.x; e.y=s0.y; }
-        m[b.id]=e;
-      }
-      rest[v]=m;
-    }
-    for(const b of rg){ delete b.att; delete b.off; }
-    const pose=(bn.pose||[]).map(pp=>{
-      const q={};
-      for(const k of Object.keys(pp||{})){
-        const s0=bind[k]||{len:0,rot:0}, e=pp[k]||{};
-        const d={ drot:(e.rot||0)-(s0.rot||0),
-                  klen:(s0.len>0.0001) ? (e.len||0)/s0.len : 1 };
-        if(s0.x!=null || e.x!=null){ d.dx=(e.x||0)-(s0.x||0); d.dy=(e.y||0)-(s0.y||0); }
-        // one world goal served both views when both had the same skeleton
-        if(e.ikx!=null){ d.ik={}; for(const v of order) d.ik[v]={x:e.ikx, y:e.iky}; }
-        q[k]=d;
-      }
-      return q;
-    });
-    o.bones={ rig:rg, rest:rest, pose:pose };
-    o.version=5;
-  }
-  if(o.version<6){
-    /* One animation became many. Everything a v5 scene held IS the first one -
-       named Idle, because that is the resting state a drawing is made in before
-       it is animated - and the standard set is appended behind it, empty. A
-       fixed-frame kind is left with its single animation: its frames are the
-       expressions a game swaps between, not a timeline. */
-    const order = o.viewOrder || Object.keys(o.views||{});
-    const vs = o.views || {};
-    const nf = Math.max(1, o.frameCount || (vs[order[0]]||[]).length || 1);
-    const free = (DOC_KINDS[o.kind]||DOC_KINDS.character).frames==='free';
-    const blank = () => { const v={}; for(const k of order) v[k]=[[]];
-                          return {views:v, pose:[{}], frameCount:1}; };
-    o.animations=[{ name: free?STD_ANIMS[0]:'Main', loop:true, pingpong:false,
-                    frameCount:nf, views:vs, pose:((o.bones||{}).pose)||[] }];
-    if(free) for(const n of STD_ANIMS.slice(1))
-      o.animations.push(Object.assign({name:n, loop:true, pingpong:false}, blank()));
-    o.activeAnim=0;
-    delete o.views; delete o.frameCount;
-    if(o.bones) delete o.bones.pose;
-    o.version=6;
-  }
-  return o;
-}
+function migrateScene(o){ return DT.migrateScene(o); }
 
 /* A v2 refs entry was {frameOrder:[name], frames:{name:[shape]}} - one sheet,
    one expression per key. In v3 it is shaped like a document: one view holding
    an array of frames, in the sheet's own order. */
-function migrateRefEntry(e){
-  if(!e || e.views) return e;                 // already v3
-  const order=(e.frameOrder||[]).slice();
-  return { kind:e.kind, title:e.title, drawingId:e.drawingId, rev:e.rev,
-           tags:e.tags||[], author:e.author||'',
-           frameNames:order, frameCount:Math.max(1,order.length),
-           views:{ main: order.map(n=>(e.frames||{})[n]||[]) },
-           refs:{} };
-}
-function migrateRefField(rf,entry){
-  if(rf.frame!=null) return;                  // already v3
-  const order=(entry && entry.frameNames) || [];
-  const i=order.indexOf(rf.pose);
-  rf.frame = i>=0 ? i : 0;
-  rf.follow = false;
-  delete rf.pose;
-}
+function migrateRefEntry(e){ return DT.migrateRefEntry(e); }
+function migrateRefField(rf,entry){ return DT.migrateRefField(rf,entry); }
 
 /* Every refLib key the document actually reaches, references inside references
    included. Seeded from the shapes, then walked through each entry's own
@@ -6127,7 +5872,8 @@ function sceneFromJSON(raw){
   clearSel();
   paletteMode='paint';
   boneMode=false; boneTool='bdraw'; selBone=null; boneGesture=null;
-  skinHideBound=false; splitCache={key:'',dx:0};
+  skinHideBound=false; splitCache={key:'',art:0,rig:0};
+  panX=0; panY=0;
   setShading(rn.shading==='gradient'?'gradient':'hatch');
   frame=Math.max(0,Math.min(frameCount()-1, ed.activeFrame||0));
   setView(viewNames.indexOf(ed.activeView)>=0 ? ed.activeView : viewNames[0]);
@@ -6143,11 +5889,12 @@ function newScene(kind){
   // from an empty skeleton.
   rig=[]; restPose={}; bonePose=[]; anims=[]; animIdx=0; frameClip=null;
   bid=1; selBone=null; boneMode=false; boneTool='bdraw';
-  skinHideBound=false; splitCache={key:'',dx:0};
+  skinHideBound=false; splitCache={key:'',art:0,rig:0};
+  panX=0; panY=0;
   setViewNames(kind||'character');            // empties and re-keys views, rebuilds the switch
   refLib.clear();
   uid=1; clearSel(); paletteMode='paint';
-  currentDrawingId=null; currentDrawingTitle=null; currentDrawingRev=0;
+  currentDrawingId=null; currentDrawingTitle=null; savedTitle=null; currentDrawingRev=0;
   currentDrawingTags=[]; currentDrawingPublished=false;
   undoStack.length=0; redoStack.length=0;
   dirty=false;
@@ -6181,6 +5928,9 @@ async function db(){
 let session=null;                 // {id, username, is_admin}; id is the auth user id
 let currentDrawingId=null;        // the row Save updates; null means Save inserts
 let currentDrawingTitle=null;     // null means Save has to ask for a name first
+/* The title as it stands in the ROW. currentDrawingTitle is what the metadata
+   box has been edited to; when the two differ, Save has a question to ask. */
+let savedTitle=null;
 let currentDrawingRev=0;          // the row's rev, stamped into any reference to it
 let currentDrawingTags=[];        // freeform, lower-case, whatever the Library searches on
 let currentDrawingPublished=false;// private until published; only published rows reach other users
@@ -6335,6 +6085,7 @@ async function saveDrawing(){
       .eq('id',currentDrawingId).select('rev').single();
     if(error) throw error;
     if(data) currentDrawingRev=data.rev;
+    savedTitle=title;
   }else{
     const {data,error}=await c.from('cs_drawings')
       .insert({user_id:session.id, scene:scene, thumbnail:thumbnail, title:title,
@@ -6343,6 +6094,7 @@ async function saveDrawing(){
       .select('id,rev').single();
     if(error) throw error;
     currentDrawingId=data.id; currentDrawingRev=data.rev;
+    savedTitle=title;
   }
 }
 
@@ -6363,8 +6115,17 @@ async function openDrawing(row){
   currentDrawingId=data.id;
   currentDrawingRev=data.rev||1;
   currentDrawingTitle=data.title||null;   // an old untitled row still gets asked
+  savedTitle=currentDrawingTitle;
   currentDrawingTags=(data.tags||[]).slice();
   currentDrawingPublished=!!data.published;
+  /* AFTER the five above, and it has to be here: sceneFromJSON ends with its own
+     syncPalette, which therefore painted the metadata box from the PREVIOUS
+     document - a freshly opened row read a blank name and "not saved yet" until
+     something else happened to re-sync. syncChrome needs no such call, since
+     drawFrame runs it every frame; syncPalette is the one nothing else drives.
+     enterObjectEdit and popEditContext already re-sync after their own
+     assignments (directly, and through setView). */
+  syncPalette();
   goScreen('draw');
 }
 
@@ -6706,15 +6467,7 @@ function refreshLibrary(){
    midpoints, so four points draw as a squircle inscribed in the rectangle - and
    shapeAt builds exactly that path, which would leave the corners of every
    imported sheet unclickable under a selection box drawn square. */
-function boxPts(w,h){
-  const hx=w/2, hy=h/2, N=4, out=[];
-  const c=[{x:-hx,y:-hy},{x:hx,y:-hy},{x:hx,y:hy},{x:-hx,y:hy}];
-  for(let i=0;i<4;i++){
-    const a=c[i], d=c[(i+1)%4];
-    for(let j=0;j<N;j++) out.push({x:a.x+(d.x-a.x)*j/N, y:a.y+(d.y-a.y)*j/N});
-  }
-  return out;
-}
+function boxPts(w,h){ return DT.boxPts(w,h); }
 
 /* Turn a fetched row into a refLib entry, and hand back its key and the size of
    the box that wraps it. Shared by the Library's pick and by Update, which is
@@ -7045,10 +6798,36 @@ function guardUnsaved(go){
 }
 /* Save, then carry on - the name prompt sits in the middle of it for a drawing
    that has never been saved, and cancelling that leaves you where you were. */
-function saveThen(after){
+function saveThen(after){ saveNow(after); }
+/* Save, with the one question it can have: the name in the metadata box no
+   longer matches the row's, and there are two honest readings of that - rename
+   this drawing, or leave it alone and write the new name out as a copy. It is
+   the reason a rename is no longer committed the moment the field is blurred;
+   the question cannot be asked after the answer has been assumed.
+   Not offered mid object-edit: the parent is holding a reference to THIS row by
+   id, and a copy would leave it pointing at the drawing you just walked away
+   from. There a rename is the only reading. */
+function saveNow(after){
   if(!session){ goScreen('login'); return; }
-  if(!currentDrawingTitle) askNameThenSave(after);
-  else doSave(after);
+  if(!currentDrawingTitle){ askNameThenSave(after); return; }
+  if(currentDrawingId && savedTitle && currentDrawingTitle!==savedTitle && !editStack.length){
+    openModal({
+      title:'The name has changed',
+      body:'This is saved as "'+savedTitle+'". Rename it, or keep that one and save "'+
+           currentDrawingTitle+'" as a new drawing?',
+      buttons:[
+        {label:'Rename', primary:true, onClick:()=>doSave(after)},
+        {label:'Save Copy', onClick:()=>{
+          // a fresh row: no id, no rev, and the publish flag does not travel
+          currentDrawingId=null; currentDrawingRev=0; currentDrawingPublished=false;
+          doSave(after);
+        }},
+        {label:'Cancel'}
+      ]
+    });
+    return;
+  }
+  doSave(after);
 }
 /* The browser's own prompt is the only thing that can catch a reload, a Back or
    a closed tab - it cannot be a modal of ours. */
@@ -7140,11 +6919,7 @@ function askTags(){
     ]
   });
 }
-document.getElementById('btnSave').addEventListener('click',()=>{
-  if(!session){ goScreen('login'); return; }
-  if(!currentDrawingTitle) askNameThenSave();
-  else doSave();
-});
+document.getElementById('btnSave').addEventListener('click',()=>saveNow());
 
 /* ==================================================== objects in this drawing
    Three things live here, and they are one story: a selection can be promoted
@@ -7291,9 +7066,15 @@ function commitMeta(){
                   np!==!!currentDrawingPublished;
   if(!changed) return;
   // A blank name is not a rename - a drawing that has one keeps it.
+  const renamed = !!nt && nt!==(currentDrawingTitle||'') && !!currentDrawingId;
   if(nt) currentDrawingTitle=nt;
   currentDrawingTags=ng;
   currentDrawingPublished=np;
+  /* A rename is HELD rather than written straight through: Save is where the
+     rename-or-copy question is asked, and it cannot ask a question the field
+     has already answered on its own. Everything else here is unambiguous and
+     still commits on the spot. */
+  if(renamed){ dirty=true; syncChrome(); syncMeta(); return; }
   syncChrome();
   if(currentDrawingId) doSave(); else syncMeta();
 }
@@ -7384,7 +7165,8 @@ async function makeObject(kind){
   btn.disabled=true;
   try{
     const def=DOC_KINDS[kind]||DOC_KINDS.item;
-    const title=(currentDrawingTitle||'Untitled')+' '+def.label.toLowerCase();
+    const title=(currentDrawingTitle||'Untitled')+' '+
+                (kind==='character' ? 'drawing' : def.label.toLowerCase());
     const scene=objectSceneFrom(grp,kind);
     const thumbnail=renderViewToDataURL(view,{maxDim:320, shapes:grp});
 
@@ -7495,7 +7277,7 @@ async function enterObjectEdit(shape){
 
     editStack.push({
       scene:sceneToJSON(), view:view, frame:frame, dirty:dirty,
-      id:currentDrawingId, title:currentDrawingTitle, rev:currentDrawingRev,
+      id:currentDrawingId, title:currentDrawingTitle, saved:savedTitle, rev:currentDrawingRev,
       tags:(currentDrawingTags||[]).slice(), published:currentDrawingPublished,
       shapeId:shape.id, refKey:shape.ref.key,
       place:{ x:shape.x, y:shape.y, rot:shape.rot, sx:shape.sx, sy:shape.sy,
@@ -7508,6 +7290,7 @@ async function enterObjectEdit(shape){
     currentDrawingId=data.id;
     currentDrawingRev=data.rev||1;
     currentDrawingTitle=data.title||null;
+    savedTitle=currentDrawingTitle;
     currentDrawingTags=(data.tags||[]).slice();
     currentDrawingPublished=!!data.published;
     syncChrome(); syncPalette(); render();
@@ -7522,6 +7305,7 @@ function popEditContext(){
   const c=editStack.pop();
   sceneFromJSON(c.scene);
   currentDrawingId=c.id; currentDrawingTitle=c.title; currentDrawingRev=c.rev;
+  savedTitle=c.saved;
   currentDrawingTags=c.tags; currentDrawingPublished=c.published;
   setView(c.view);
   frame=Math.max(0,Math.min(frameCount()-1,c.frame));
@@ -7571,8 +7355,24 @@ document.getElementById('editRefBtn').addEventListener('click',()=>{
   const grp=selGroup();
   if(grp.length===1 && grp[0].ref) enterObjectEdit(grp[0]);
 });
+function setPaletteOpen(open){
+  document.body.classList.toggle('nopal', !open);
+  document.getElementById('btnPalToggle').textContent = open ? '>' : '<';
+  resize(); render();
+}
+document.getElementById('btnPalToggle').addEventListener('click',
+  ()=>setPaletteOpen(document.body.classList.contains('nopal')));
+
 document.getElementById('btnEditDone')  .addEventListener('click',()=>exitObjectEdit(true));
 document.getElementById('btnEditCancel').addEventListener('click',()=>exitObjectEdit(false));
+
+/* A checkbox keeps the focus after a click, and the canvas cannot take it back
+   - it is not focusable. Handing it back here means the keydown guard above is
+   never even reached for one. */
+document.addEventListener('change',e=>{
+  const t=e.target;
+  if(t && t.tagName==='INPUT' && (t.type==='checkbox'||t.type==='radio')) t.blur();
+});
 
 window.addEventListener('keydown',e=>{
   const k=e.key.toLowerCase();
@@ -7599,7 +7399,17 @@ window.addEventListener('keydown',e=>{
     else if(k==='s'){ e.preventDefault(); document.getElementById('btnSave').click(); }
     return;
   }
-  if(e.target.tagName==='INPUT'||e.target.tagName==='SELECT') return;  // sliders, the search box, the bone picker
+  /* sliders, the search box, the bone picker - but NOT a checkbox. Ticking
+     "loop" left the focus sitting on it, and every hotkey went dead for the
+     rest of the session: Space toggled the box back instead of playing the
+     animation, Q/E did nothing, Delete did nothing. Same shape as the syncMeta
+     focus bug - the canvas is not focusable, so nothing ever takes it back. */
+  {
+    const tt=(e.target.type||'').toLowerCase();
+    const typing = (e.target.tagName==='INPUT' && tt!=='checkbox' && tt!=='radio')
+                || e.target.tagName==='SELECT';
+    if(typing) return;
+  }
   /* Q and E walk the animation, Tab turns the drawing round, space plays it.
      Q used to be the front/back switch; it is the frames that you step through
      constantly now, so they get the pair of keys under your left hand. */
@@ -7623,6 +7433,7 @@ window.addEventListener('keydown',e=>{
   else if(e.key==='ArrowDown'){ e.preventDefault(); if(!boneMode) reorderSel(-1); }
   else if(e.key==='ArrowLeft'){ e.preventDefault(); pauseAnim(); stepFrame(-1); render(); }
   else if(e.key==='ArrowRight'){e.preventDefault(); pauseAnim(); stepFrame( 1); render(); }
+  else if(e.key==='Home'){ e.preventDefault(); panX=panY=0; render(); }
 });
 
 /* ================================================================== boot */
@@ -7639,6 +7450,7 @@ buildModeMenu();
 setTool('brush');
 syncHistory();
 syncPalette();
+setPaletteOpen(window.innerWidth>820);   // folded to start with on a phone
 startRenderLoop();
 
 /* Restoring a session is asynchronous now - supabase-js reads and refreshes the
