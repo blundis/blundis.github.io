@@ -27,7 +27,7 @@
 
   /* Stamped so a test can tell a reloaded page from a cached one - `-c-1`
      disables caching, but a stale dt.js reads as a baffling failure. */
-  DT.BUILD = '1.6.0';
+  DT.BUILD = '1.7.2';
 
   /* ------------------------------------------------------------- constants */
   const TAU = Math.PI * 2;

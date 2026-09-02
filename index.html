@@ -883,7 +883,7 @@ const stage= document.getElementById('stage');
    It is NOT the scene format version (SCENE_VERSION) - that one is data and is
    what migrateScene gates on. Bump the minor part for a feature, the patch part
    for a fix, and bump it in the same commit as the change. */
-const APP_VERSION = '1.6.0';
+const APP_VERSION = '1.7.2';
 
 /* ---------------------------------------------------------------- state */
 /* A document is one of four kinds. A character and an item have a front and a
@@ -998,7 +998,10 @@ let   tool    = 'brush';
 let   selected= null;   // the anchor shape - gestures and the sidebar read this one
 let   extra   = [];     // the rest of a multi-selection (box drag / shift-click)
 let   onionOn = true;          // ghost the OTHER view (front under back)
-let   onionFrame = true;       // ghost the PREVIOUS frame
+let   onionFrame = true;       // ghost BOTH neighbouring frames
+/* ...and the pair of them as Skeleton mode found them, so leaving that mode can
+   put them back. Null whenever bone mode is not the thing holding them off. */
+let   onion0 = null;
 let   shading = 'hatch';      // 'gradient' | 'hatch'
 let   uid     = 1;
 
@@ -1055,6 +1058,23 @@ let restPose = {};    // restPose[view][boneId] -> { len, rot, att, off, mx, my 
 let bonePose = [];    // bonePose[frame][boneId] -> { drot, klen, dx?, dy?, ik:{view:{x,y}} }
 let bid      = 1;     // bone ids are a SEPARATE namespace from the shape uid
 let selBone  = null;
+/* ...and, in the SKINNING tool alone, the OTHER bones a shift-click has added to
+   the selection. Auto-Attach was the only way a shape could end up on several
+   bones at once, and it decides them from the geometry - which is exactly what
+   is no use when two bones run close together under overlapping shapes. So
+   Attach takes a SET: selBone is still the anchor every gesture, every panel
+   and every other tool reads, and this is the rest of it. It is deliberately
+   NOT in the undo snapshot (it is a selection, not document state) and every
+   read filters it through boneById, so a deleted bone simply drops out. */
+let boneExtra = [];
+const skinToolOn = () => boneMode && boneTool==='bskin';
+function boneSelIds(){
+  const out = (selBone!=null && boneById(selBone)) ? [selBone] : [];
+  if(skinToolOn()) for(const id of boneExtra)
+    if(id!==selBone && boneById(id) && out.indexOf(id)<0) out.push(id);
+  return out;
+}
+const inBoneSel = id => boneSelIds().indexOf(id)>=0;
 let boneMode = false;
 let boneTool = 'bdraw';          // 'bdraw' | 'bedit' | 'bskin' | 'bhand'
 /* The animation bar's "skeleton" box. It floats the rig over the ORDINARY editor
@@ -1691,7 +1711,15 @@ function drawFrame(){
     for(const d of [-1,1]){
       let f=frame+d;
       if(f<0 || f>nf-1){ if(!wrap) continue; f=(f+nf)%nf; }
-      for(const s of (views[view]||[])[f]||[]) drawShape(s,{ghost:true, pframe:RF});
+      /* ...posed as ITS OWN frame, which is the whole of what the ghost is for.
+         It used to be drawn with RF - the frame you are STANDING on - so on a
+         rigged drawing animated the way the app tells you to (rig frame 0, then
+         Duplicate Frame and pose) every frame holds the same shapes and the
+         ghost was deformed onto the live artwork exactly, showing nothing at
+         all. Measured: zero onion pixels anywhere the neighbour's own pose
+         actually reaches. It only ever looked right on a drawing animated by
+         REDRAWING each frame, which is the case the feature was tested on. */
+      for(const s of (views[view]||[])[f]||[]) drawShape(s,{ghost:true, pframe:f});
     }
   }
   /* While you are rigging, the artwork is context rather than the subject - it
@@ -1904,8 +1932,11 @@ function drawBones(){
     ctx.lineWidth=1.4; ctx.strokeStyle=on?'#ffc94d':'#6ea8ff'; ctx.stroke();
   };
 
-  for(const b of rig) if(b.id!==selBone){ const w=W.get(b.id);
-    body(w,false); knob(w,boneR(w),false,true); knob(boneTip(w),boneR(w),false,false); }
+  /* Every bone in the skinning selection reads as selected; only the ANCHOR
+     gets the label, the scale box and the tip ring below. */
+  const selIds=boneSelIds();
+  for(const b of rig) if(b.id!==selBone){ const w=W.get(b.id), on=selIds.indexOf(b.id)>=0;
+    body(w,on); knob(w,boneR(w),on,true); knob(boneTip(w),boneR(w),on,false); }
 
   const sb = selBone!=null ? boneById(selBone) : null;
   if(sb){
@@ -2166,6 +2197,7 @@ function restore(str){
   setView(snap.view);
   syncFrames();
   selBone = wantBone!=null && boneById(wantBone) ? wantBone : null;
+  boneExtra=[];      // a bone SET is a selection, not document state
   const ids=snap.sel||[];
   const back=ids.map(id=>cur().find(s=>s.id===id)).filter(Boolean);
   selected=back[0]||null; extra=back.slice(1);
@@ -3087,16 +3119,32 @@ function enterBoneMode(){
   pauseAnim(); clearSel();
   /* Both onions off: the artwork is already greyed out for rigging, and a
      ghosted view or frame on top of the skeleton reads as more of it. The
-     frame one is unreachable anyway while the animation bar is hidden. They
-     stay off on the way out - it is a default, not a stashed setting. */
+     frame one is unreachable anyway while the animation bar is hidden.
+     They are STASHED and put back on the way out. They used to be left off -
+     "a default, not a stashed setting" - and that is wrong in practice:
+     rigging is something you dip into constantly, and coming back to a dead
+     onion with the box silently unticked reads as the onion being broken
+     rather than as a mode having turned it off. */
+  onion0={view:onionOn, frame:onionFrame};
   onionOn=false; onionFrame=false;
   document.getElementById('onion').checked=false;
   document.getElementById('animOnion').checked=false;
   syncPalette(); render();
 }
+/* Every way OUT of bone mode goes through this - the button and the tool keys
+   through exitBoneMode, a load and a new scene through their own resets - or
+   the onions would be left off by a mode that is no longer up, with onion0
+   stale behind them. */
+function restoreOnions(){
+  if(!onion0) return;
+  onionOn=onion0.view; onionFrame=onion0.frame; onion0=null;
+  document.getElementById('onion').checked=onionOn;
+  document.getElementById('animOnion').checked=onionFrame;
+}
 function exitBoneMode(){
   if(!boneMode) return false;
-  boneMode=false; selBone=null; boneGesture=null;
+  boneMode=false; selBone=null; boneExtra=[]; boneGesture=null;
+  restoreOnions();
   if(paletteMode==='bones') paletteMode='paint';
   return true;
 }
@@ -3151,6 +3199,7 @@ function setBoneTool(t){
   // The shape selection means something only to Skinning; the other two would
   // leave a stale group behind the greyed art.
   if(t!=='bskin') clearSel();
+  boneExtra=[];                    // a bone SET means nothing outside Skinning
   syncPalette(); render();
 }
 
@@ -3334,7 +3383,7 @@ const BTOOL_HINTS={
   bdraw:'',
   bedit:'Drag the joints to re-align the skeleton. It edits the REST pose OF THIS VIEW, so nothing you drag here deforms a shape and the other view keeps its own fit.',
   bhand:'Drag a bone to swing it; the corner handles scale it. A bone an IK target already poses does not take a drag - move its target instead.',
-  bskin:'Click a shape to select it, shift-click or drag a box to take several, then a bone to attach them to. The bones only take a click on their end circles here, so shapes underneath stay reachable.'
+  bskin:'Click a shape to select it, shift-click or drag a box to take several, then a bone to attach them to - shift-click bones for a weighted attach to several. The bones only take a click on their end circles here, so shapes underneath stay reachable.'
 };
 function syncBonePanel(){
   /* The panel is also borrowed by Draw mode's posing (see syncPalette), where
@@ -4104,7 +4153,25 @@ const SKIN_MAXBONES_IN = 12;
 function boneSkinDown(w,hit,e){
   boneGesture=null;
   if(hit){
-    selBone=hit.bone.id;
+    /* SHIFT builds a set of bones, exactly as it builds a set of shapes - and
+       it leaves the shape selection alone, because the whole point of it is to
+       aim several bones at the shapes you have already picked. Attach then
+       binds to the lot, weighted, which is what you want where two bones run
+       close together under overlapping shapes and Auto-Attach's geometry
+       cannot tell them apart. */
+    if(e && e.shiftKey){
+      const id=hit.bone.id;
+      if(id===selBone){                       // dropping the anchor promotes the next
+        selBone = boneExtra.length ? boneExtra.shift() : null;
+      }else{
+        const i=boneExtra.indexOf(id);
+        if(i>=0) boneExtra.splice(i,1);
+        else if(selBone==null) selBone=id;
+        else boneExtra.push(id);
+      }
+      syncPalette(); render(); return;
+    }
+    selBone=hit.bone.id; boneExtra=[];
     const g=cur().filter(s=>{ const sk=skinOf(s); return sk && sk.bones.indexOf(hit.bone.id)>=0; });
     selected=g[0]||null; extra=g.slice(1);
     syncPalette(); render(); return;
@@ -4125,7 +4192,9 @@ function boneSkinDown(w,hit,e){
        throw away the bone you had just aimed at, and the whole attach had to be
        started again. */
     const sk=skinOf(s);
-    if(sk && !add) selBone=sk.bones[0];   // bones[0] is the strongest by construction
+    // bones[0] is the strongest by construction; the rest of a weighted binding
+    // comes across as the shift-selection, so "what is this on?" answers whole
+    if(sk && !add){ selBone=sk.bones[0]; boneExtra=sk.bones.slice(1); }
   }else{
     /* Empty paper: drag a box to pick a crowd of shapes at once, exactly as the
        Hand does. Attach, Auto-Attach and Remove all loop over selGroup(), so a
@@ -4182,12 +4251,27 @@ function bonesNear(s,B,fall){
 }
 
 function attachToBone(){
-  const g=selGroup();
-  if(!g.length || selBone==null || !boneById(selBone)) return;
+  const g=selGroup(), bones=boneSelIds();
+  if(!g.length || !bones.length) return;
   pushUndo();
-  // falloff 0 is the rigid case: one bone, weight 1, and the blend in worldPts
-  // reduces exactly to the closed-form composition.
-  for(const s of g) s.skin={bones:[selBone], falloff:0};
+  /* ONE bone is the rigid case - falloff 0, weight 1, and the blend in worldPts
+     reduces exactly to the closed-form composition. SEVERAL is the explicit
+     version of what Auto-Attach guesses: the same weighted binding, with the
+     bones named by hand rather than measured off the geometry. */
+  const fall = bones.length>1 ? bindFalloff : 0;
+  for(const s of g){
+    /* A reference's pts are a placement box, not an outline, so it cannot be
+       point-deformed: one bone, rigid, always - the anchor. */
+    if(s.ref){ s.skin={bones:[bones[0]], falloff:0}; continue; }
+    /* ...and a weighted shape needs points to bend with, or a six-point ribbon
+       over three bones hinges rather than curving. Same densify Auto-Attach
+       does, under the same undo. */
+    if(bones.length>1 && s.pts.length<SKIN_MIN_PTS){
+      const perim=pathLength(s.pts)+(s.closed!==false?dist(s.pts[s.pts.length-1],s.pts[0]):0);
+      s.pts=resample(s.pts, Math.max(2, perim/SKIN_MIN_PTS), s.closed!==false);
+    }
+    s.skin={bones:bones.slice(), falloff:fall};
+  }
   bumpBind(); syncPalette(); render();
 }
 function bindToSkeleton(){
@@ -4257,8 +4341,11 @@ function syncSkinPanel(){
   if(boneTool!=='bskin') return;
   const g=selGroup();
   const b=selBone!=null?boneById(selBone):null;
+  const bones=boneSelIds();
   const bound=g.filter(s=>skinOf(s));
-  document.getElementById('btnAttachBone').disabled = !(g.length && b);
+  const ab=document.getElementById('btnAttachBone');
+  ab.disabled = !(g.length && bones.length);
+  ab.textContent = bones.length>1 ? 'Attach to '+bones.length+' Bones' : 'Attach to Bone';
   document.getElementById('btnBindSkel')  .disabled = !(g.length && rig.length);
   document.getElementById('btnUnbind')    .disabled = !bound.length;
 
@@ -4278,7 +4365,7 @@ function syncSkinPanel(){
   /* The hint depends on the split, which syncBonePanel does not know about:
      with the columns apart a bone takes a press anywhere along it. */
   if(splitOn()) document.getElementById('boneHint').textContent =
-    'The artwork is on the left and the skeleton on the right. Click shapes on one side and bones - anywhere along them - on the other, then Attach.';
+    'The artwork is on the left and the skeleton on the right. Click shapes on one side and bones - anywhere along them - on the other, shift-clicking for several of either, then Attach.';
 
   const split=document.getElementById('skinSplit');
   split.checked = skinSplit && !!rig.length;
@@ -4296,12 +4383,14 @@ function syncSkinPanel(){
   const note=document.getElementById('skinNote');
   const hidden = (skinHideBound ? ' '+cur().filter(s=>skinOf(s)).length+' attached shape(s) hidden.' : '')+
                  (nHid ? ' '+nHid+' shape(s) hidden by hand - Auto-Attach skips them.' : '');
+  const names = bones.map(id=>'"'+boneLabel(boneById(id))+'"').join(', ');
   note.textContent = (
     !rig.length ? 'Draw some bones first.' :
-    !g.length   ? (b ? 'Nothing skinned to "'+boneLabel(b)+'" yet. Click shapes to select them.'
+    !g.length   ? (b ? 'Nothing skinned to '+names+' yet. Click shapes to select them.'
                      : 'Click a bone to see what is on it, or a shape to see its bone.') :
-    !b          ? g.length+' shape'+(g.length>1?'s':'')+' selected. Click a bone to attach to.' :
-    g.length+' shape'+(g.length>1?'s':'')+' → "'+boneLabel(b)+'". '+
+    !b          ? g.length+' shape'+(g.length>1?'s':'')+' selected. Click a bone to attach to, shift-click for more.' :
+    g.length+' shape'+(g.length>1?'s':'')+' → '+names+
+      (bones.length>1?' (weighted).':'. ')+' Shift-click a bone to add it. '+
       bound.length+' already bound. Rig frame 0, then Duplicate Frame - skinning lives on the shape, and frames hold different shapes.'
   )+hidden;
 }
@@ -4397,6 +4486,7 @@ document.getElementById('btnShowAll')  .addEventListener('click',showAllShapes);
 document.getElementById('skinBone').addEventListener('change',e=>{
   const id=e.target.value===''?null:+e.target.value;
   selBone = (id!=null && boneById(id)) ? id : null;
+  boneExtra=[];                 // the list picks ONE bone; shift-click builds a set
   syncPalette(); render();
 });
 document.getElementById('btnAttachBone').addEventListener('click',attachToBone);
@@ -5871,7 +5961,8 @@ function sceneFromJSON(raw){
   pauseAnim();
   clearSel();
   paletteMode='paint';
-  boneMode=false; boneTool='bdraw'; selBone=null; boneGesture=null;
+  boneMode=false; boneTool='bdraw'; selBone=null; boneExtra=[]; boneGesture=null;
+  restoreOnions();
   skinHideBound=false; splitCache={key:'',art:0,rig:0};
   panX=0; panY=0;
   setShading(rn.shading==='gradient'?'gradient':'hatch');
@@ -5888,7 +5979,8 @@ function newScene(kind){
   // Before setViewNames, so its pose rebuild - and its animation list - start
   // from an empty skeleton.
   rig=[]; restPose={}; bonePose=[]; anims=[]; animIdx=0; frameClip=null;
-  bid=1; selBone=null; boneMode=false; boneTool='bdraw';
+  bid=1; selBone=null; boneExtra=[]; boneMode=false; boneTool='bdraw';
+  restoreOnions();
   skinHideBound=false; splitCache={key:'',art:0,rig:0};
   panX=0; panY=0;
   setViewNames(kind||'character');            // empties and re-keys views, rebuilds the switch
