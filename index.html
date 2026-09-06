@@ -424,6 +424,11 @@
   #metaSec input[type=text]:focus,#bonePanel input[type=text]:focus{border-color:var(--accent)}
   #metaSec input[type=text]:disabled,#bonePanel input[type=text]:disabled{opacity:.5;cursor:default}
   #metaFacts{font-size:11px;color:var(--muted);line-height:1.6}
+  /* ---------- audition ---------- */
+  #audPanel{display:flex;flex-direction:column;gap:11px;min-height:0}
+  #audList{display:flex;flex-direction:column;gap:6px;margin-top:2px}
+  #audList .pbtn{justify-content:flex-start}
+  #audHint,#audNote{font-size:11px;color:var(--muted);line-height:1.6}
   /* ---------- bone mode ---------- */
   #bonePanel{display:flex;flex-direction:column;gap:11px;min-height:0}
   #bonePanel .seg button{flex:1;padding:6px 8px;letter-spacing:0}
@@ -805,6 +810,24 @@
    </div>
    <div id="boneEmpty">No bone selected.</div>
  </div>
+
+ <!-- Audition swaps the WHOLE sidebar, exactly as bone mode and the Library
+      do. It is the only panel offered on EVERY kind - eyes and mouths
+      included - so nothing in it may assume a rig, a second view or a free
+      frame list. -->
+ <div id="audPanel" class="hidden">
+   <div class="psec">
+     <h3>Audition</h3>
+     <div id="audHint">Arrow keys or WASD walk the drawing about. Walking left flips
+       it; walking up shows the back view. Escape goes back to Draw.</div>
+   </div>
+   <div class="divider"></div>
+   <div class="psec">
+     <h3 id="audListHead">Animations</h3>
+     <div id="audList"></div>
+     <div id="audNote"></div>
+   </div>
+ </div>
 </div>
 </div><!-- /#main -->
 
@@ -899,7 +922,7 @@ const stage= document.getElementById('stage');
    It is NOT the scene format version (SCENE_VERSION) - that one is data and is
    what migrateScene gates on. Bump the minor part for a feature, the patch part
    for a fix, and bump it in the same commit as the change. */
-const APP_VERSION = '1.9.1';
+const APP_VERSION = '1.10.0';
 
 /* ---------------------------------------------------------------- state */
 /* A document is one of four kinds. A character and an item have a front and a
@@ -1122,6 +1145,11 @@ function boneSelIds(){
 const inBoneSel = id => boneSelIds().indexOf(id)>=0;
 let boneMode = false;
 let boneTool = 'bdraw';          // 'bdraw' | 'bedit' | 'bskin' | 'bhand'
+/* The THIRD mode. It is declared up here beside boneMode rather than down with
+   the rest of its own state because syncFrames, syncPalette and drawFrame all
+   read it and all three are reachable from boot. Everything else audition owns
+   lives in one block further down and is only ever read from a function. */
+let audMode = false;
 /* The animation bar's "skeleton" box. It floats the rig over the ORDINARY editor
    as a set of draggable handles, so posing never needs bone mode - which is only
    for building a skeleton and skinning to it. */
@@ -1719,13 +1747,25 @@ function splitDX(){ return splitPair().rig; }
 const skinHidden = s => boneMode && boneTool==='bskin' &&
                         (!!s.hidden || (skinHideBound && !!skinOf(s)));
 
-function drawFrame(){
+function drawFrame(ts){
   // self-heal the backing size: the palette panel opening changes the stage width
   if(stage.clientWidth!==Math.round(cv.width/dpr) || stage.clientHeight!==Math.round(cv.height/dpr)) resize();
   const w=cv.width/dpr, h=cv.height/dpr;
   drawBackground(w,h);
 
   syncChrome();
+
+  /* Audition is a VIEWER, and this one line is the whole of what it costs the
+     painter. Everything below it - both onions, the edit backdrop, the artwork,
+     the live stroke, the shape rig, the group rig, the depth chevrons, the
+     marquee, the eraser/smear disc, the skin overlay, the bones and the IK
+     targets - is editor chrome for a document you are not editing, and ONE
+     return is a far better guard than fourteen !audMode arms that can each be
+     forgotten separately. The PAN closes over it too: the character is drawn in
+     SCREEN space and the canvas pointerdown refuses the pan while this is up.
+     The guides stay - the ground line is what a walk cycle was drawn against,
+     and it is where the character spawns. */
+  if(audMode){ drawGuides(w,h); drawAudition(ts,w,h); return; }
 
   ctx.save();
   if(panX||panY) ctx.translate(panX,panY);
@@ -2204,8 +2244,13 @@ function drawIKTargets(){
 }
 
 
-function render(){ drawFrame(); }
-function startRenderLoop(){ (function loop(){ drawFrame(); requestAnimationFrame(loop); })(); }
+/* drawFrame takes the loop's TIMESTAMP now, and render() passes 0. Audition is
+   the only thing that reads it - it moves the character and steps its frames on
+   one accumulator, exactly as game.html does - and passing 0 is what keeps a
+   synchronous render() a pure repaint that advances nothing, which every pixel
+   test in CLAUDE.md depends on. Still ONE loop and ONE scheduler. */
+function render(){ drawFrame(0); }
+function startRenderLoop(){ (function loop(ts){ drawFrame(ts); requestAnimationFrame(loop); })(0); }
 
 /* ======================================================= undo / redo stacks */
 const undoStack=[], redoStack=[];
@@ -2332,6 +2377,12 @@ cv.addEventListener('auxclick',e=>e.preventDefault());
 cv.addEventListener('contextmenu',e=>{ if(e.ctrlKey) e.preventDefault(); });
 
 cv.addEventListener('pointerdown',e=>{
+  /* Audition takes no press at all: it is a viewer, its sidebar holds no text
+     field to commit, and the PAN goes with it - the character is drawn in
+     screen space above the pan transform, so panning would slide the paper out
+     from under a figure that stayed exactly where it was. The window-level
+     dismiss for the mode menu is a separate listener and still fires. */
+  if(audMode) return;
   /* A sidebar text field that is still focused has to be COMMITTED before
      anything else runs. The canvas is not focusable, so pressing it does not
      blur the field on its own - and this handler calls syncPalette -> syncMeta,
@@ -3218,6 +3269,311 @@ function exitBoneMode(){
   if(paletteMode==='bones') paletteMode='paint';
   return true;
 }
+
+/* =========================================================== audition mode
+   A THIRD mode beside Draw and Skeleton: the drawing walks around the stage
+   under the arrow keys or WASD and its animations can be watched on demand.
+
+   It is a VIEWER - it takes no edit at all - and that one property is what
+   makes the whole feature cheap. It drives a SEPARATE DT Doc built from a
+   scene snapshot on the way in, which is the path game.html's drawActor
+   already takes, rather than the editor's own views/anims/animIdx/frame/
+   bonePose globals. So there is no undo to push, no `dirty` to set, no
+   stashAnim to sequence, and no way for a mode that is only ever entered and
+   left to leave the document changed. The cost is one sceneToJSON plus one
+   docFromScene per entry - two stringifies of the document, once, on a click.
+
+   Everything below is EPHEMERAL: none of it is in snapshot(), in the scene, or
+   in either undo stack, which is also why the render loop is allowed to write
+   it. That is the same bargain game.html makes when its loop writes inst.frame:
+   the invariant is that the loop never writes DOCUMENT state, and a private Doc
+   is exactly what preserves it. */
+let audDoc    = null;        // the private Doc; rebuilt on every entry
+let audAnchor = null;        // {x,y,w,h}: the bottom centre of the art, measured ONCE
+let audPos    = {x:0,y:0};   // SCREEN space, and it is the FEET
+let audFlip   = false;       // the last horizontal step was left; the art faces right
+let audBack   = false;       // ...and the last vertical step was up
+let audClip   = null;        // a clicked animation's index, or null for the two states
+let audHold   = false;       // ...and it has run out and is holding its last frame
+let audDir    = 1;           // ping-pong's direction, this Doc's own
+let audAcc    = 0;           // the frame accumulator, in ms
+let audT      = 0;           // the last timestamp seen; 0 means "no dt yet"
+let audIdle   = null;        // the animation index standing still uses, or null
+let audWalk   = null;        // ...and the one walking uses
+const audKeys = new Set();   // the directions being HELD: 'up'|'down'|'left'|'right'
+
+const AUD_SPEED = 260;       // px per second, in the document's own units
+/* One table, keyed on the LOWER-CASED key, so 'ArrowUp' and 'w' land in the
+   same slot and the keyup handler can be a single line. */
+const AUD_KEYS = {arrowup:'up', arrowdown:'down', arrowleft:'left', arrowright:'right',
+                  w:'up', s:'down', a:'left', d:'right'};
+
+/* The same "does this animation have anything in it" test the animation picker
+   already makes in syncFrames, over a Doc instead of the live globals. A Doc's
+   anims[i].views is never aliased the way the editor's are, so there is no
+   stale-record caveat here. */
+const audArt = (doc,i) => doc.viewNames.some(v =>
+  (((doc.anims[i]||{}).views||{})[v] || []).some(f => f && f.length));
+const audViewArt = (doc,v) => (doc.views[v]||[]).some(f => f && f.length);
+
+/* game.html's anchorOf, with one difference that matters: it is measured ONCE
+   for the whole visit, off ONE animation, and never re-derived per animation.
+   A per-animation anchor moves with that animation's own bbox, so the character
+   would jump sideways the instant you clicked Attack. A `ref` shape has no pts
+   of its own and contributes nothing - the anchor is the body's silhouette. */
+function audMeasure(doc, ai){
+  const list = (doc.anims[ai] && doc.anims[ai].views) || doc.views;
+  let b=null;
+  for(const v of doc.viewNames){
+    for(const s of (list[v]||[])[0] || []){
+      if(!s.pts || s.pts.length<3) continue;
+      const bb=DT.bbox(DT.worldPts(doc,s,0,v)), pad=(s.lw||0)/2;
+      const e={x0:bb.x0-pad, y0:bb.y0-pad, x1:bb.x1+pad, y1:bb.y1+pad};
+      b = b ? {x0:Math.min(b.x0,e.x0), y0:Math.min(b.y0,e.y0),
+               x1:Math.max(b.x1,e.x1), y1:Math.max(b.y1,e.y1)} : e;
+    }
+    if(b) break;                      // the first view with art in it wins
+  }
+  return b ? {x:(b.x0+b.x1)/2, y:b.y1, w:b.x1-b.x0, h:b.y1-b.y0}
+           : {x:0, y:0, w:60, h:60};
+}
+function audBuildDoc(){
+  /* sceneToJSON stashAnims first, which is a normalisation rather than an edit:
+     it sets no dirty flag and pushes no undo, and Save and Export both already
+     call it for exactly the same reason. */
+  const doc = DT.docFromScene(sceneToJSON());
+  audIdle = audArt(doc,0) ? 0 : null;
+  if(audIdle==null)
+    for(let i=0;i<doc.anims.length;i++) if(audArt(doc,i)){ audIdle=i; break; }
+  const wi = DT.animIndexByName(doc,'Walk');
+  audWalk = (wi>=0 && audArt(doc,wi)) ? wi : audIdle;
+  const start = audIdle!=null ? audIdle : 0;
+  DT.setAnim(doc, start); doc.frame=0; doc.view=doc.viewNames[0];
+  audAnchor = audMeasure(doc, start);
+  return doc;
+}
+
+/* Everything that MOVES happens here, driven by the ONE render loop's own
+   timestamp - never a setInterval, never a second requestAnimationFrame. It is
+   reached only with a real ts, so render() (which passes 0) repaints the
+   current state and advances nothing at all. */
+function audTick(ts, w, h){
+  const dt = Math.min(200, ts - (audT||ts));   // a tab that slept must not teleport
+  audT = ts;
+  /* A modal or the gallery owns the keyboard, and the keydown guards return
+     above audition - so a key held when one opened would stay held for ever.
+     One line here covers every stealer there is. */
+  if(modalOpen || uiScreen!=='draw') audKeys.clear();
+
+  let dx = (audKeys.has('right')?1:0) - (audKeys.has('left')?1:0);
+  let dy = (audKeys.has('down') ?1:0) - (audKeys.has('up')  ?1:0);
+  const moving = !!(dx||dy);
+  if(dx&&dy){ dx*=Math.SQRT1_2; dy*=Math.SQRT1_2; }   // a diagonal is not 1.41x faster
+
+  if(moving){
+    /* The FLIP is latched: walking straight up leaves it where it was, so a
+       figure that turns and walks away is still facing the way it was facing.
+       The VIEW is not - it is read off this step alone, so up (or up plus a
+       sideways key) shows the back and anything else shows the front. Latching
+       it too left you looking at a back that had walked up once and then set
+       off sideways, which reads as the view being stuck. */
+    if(dx>0) audFlip=false; else if(dx<0) audFlip=true;
+    audBack = dy<0;
+    audPos.x += dx*AUD_SPEED*dt/1000;
+    audPos.y += dy*AUD_SPEED*dt/1000;
+    /* Clamped to the VISIBLE canvas, on the anchor's own extents - the anchor
+       is the bbox centre, so the half-width is the same either way round and
+       the flip cannot push a shoulder off the edge. */
+    const hw=audAnchor.w/2;
+    audPos.x = Math.max(hw, Math.min(Math.max(hw,w-hw), audPos.x));
+    audPos.y = Math.max(Math.min(audAnchor.h,h), Math.min(h, audPos.y));
+    audClip=null; audHold=false;                // moving cancels a clicked one
+  }
+
+  // which animation...
+  let want = moving ? audWalk : (audClip!=null ? audClip : audIdle);
+  if(want==null) want = audDoc.animIdx;         // nothing has art: hold what is up
+  if(want!==audDoc.animIdx){
+    DT.setAnim(audDoc, want); audDoc.frame=0; audAcc=0; audDir=1; audHold=false;
+  }
+  /* ...and which view. The back view only if that view really holds art in this
+     animation: a half-drawn document must not make the character vanish the
+     moment it turns round. A ONE-VIEW kind never leaves viewNames[0]. */
+  const vn=audDoc.viewNames;
+  audDoc.view = (audBack && vn.length>1 && audViewArt(audDoc,vn[1])) ? vn[1] : vn[0];
+
+  audAcc += dt;
+  const step = 1000/(audDoc.fps || DT.FPS);
+  while(audAcc>=step){ audAcc-=step; audStep(moving); }
+}
+
+/* frameTick's playback rules, over audDoc and touching nothing else. The two
+   STATES - Idle and Walk - always loop: they are states rather than clips, and
+   a Walk with `loop` unticked stopping dead mid-stride is not what anyone
+   means by it. A CLICKED clip honours its own two flags, so one with loop on
+   runs until something interrupts it and one with loop off runs once and HOLDS
+   its last frame. */
+function audStep(moving){
+  if(audHold) return;
+  const a = audDoc.anims[audDoc.animIdx] || {};
+  const n = DT.frameCountOf(audDoc);
+  if(n<2) return;
+  const loop = (!moving && audClip!=null) ? a.loop!==false : true;
+  if(a.pingpong){
+    let f=audDoc.frame+audDir;
+    if(f>n-1){ audDir=-1; f=n-2; }
+    else if(f<0){ if(!loop){ audHold=true; return; } audDir=1; f=1; }
+    audDoc.frame=f;
+  }else{
+    let f=audDoc.frame+1;
+    if(f>n-1){ if(!loop){ audHold=true; return; } f=0; }
+    audDoc.frame=f;
+  }
+}
+
+/* The character. Its placement and its flip compose into ONE transform and
+   dt.js draws under it - the same bargain splitArt() already makes for the
+   Skinning split view and drawActor makes in the game.
+
+   THE LIGHT MUST NOT FLIP WITH THE FIGURE. A negative x scale mirrors
+   everything drawn under it, the shading included - drawShape derives its
+   terminator from a bbox of worldPts in DOCUMENT space, laid out before this
+   transform - so a figure facing left came out lit from the top LEFT, which is
+   the light source jumping across the stage every time it turns round. The
+   whole point of the light being fixed is that it says which way the form is
+   turned, and a light that turns with it says nothing.
+
+   The fix costs nothing and needs no dt.js change: the light is a pair of BBOX
+   FRACTIONS on the Doc, so mirroring THOSE in x cancels the transform exactly
+   and the shadow lands back on the same side of the screen. terminatorArc is
+   the one place both modes read it, so the gradient and the hatch band agree,
+   as they always must.
+
+   (What this does NOT undo is the hatch STRIPES' own direction: the 45-degree
+   lines are laid out in canvas space inside dt.js, so a `/` becomes a `\`.
+   That is texture rather than lighting - the band is on the correct side - and
+   fixing it would mean a second hatch path in the shared runtime.) */
+const audLightOf = f => ({x:1-f.x, y:f.y});
+function drawAudition(ts, w, h){
+  if(!audDoc) return;
+  if(ts) audTick(ts, w, h);          // ts 0: paint, advance nothing
+  const an=audAnchor;
+  const lf=audDoc.lightFrom, lt=audDoc.lightTo;
+  if(audFlip){ audDoc.lightFrom=audLightOf(lf); audDoc.lightTo=audLightOf(lt); }
+  ctx.save();
+  ctx.translate(audPos.x, audPos.y);
+  if(audFlip) ctx.scale(-1,1);
+  ctx.translate(-an.x, -an.y);
+  DT.drawFrameShapes(ctx, audDoc, DT.curFrame(audDoc),
+                     {pframe:audDoc.frame, pview:audDoc.view});
+  ctx.restore();
+  audDoc.lightFrom=lf; audDoc.lightTo=lt;
+  syncAudLit();                      // memoised: one string compare a frame
+}
+
+/* Audition is a mode you live in, like bone mode and unlike the Library, so it
+   is only ever left deliberately: by the menu, by Escape, by a tool (which
+   cannot be reached while it is up), or by a load or a new scene. */
+function enterAudition(){
+  if(audMode) return;
+  audMode=true; paletteMode='audition';
+  /* Playback and a take both drive the editor's OWN frame index twelve times a
+     second, and the bar they belong to is about to disappear. */
+  pauseAnim();
+  /* The selection is chrome for a document that is not being edited, and the
+     bone selection with it. Deliberately NOT stashing the onions the way
+     enterBoneMode does: bone mode still draws the artwork, so a ghost over a
+     skeleton reads as more skeleton, whereas nothing audition draws reads them
+     at all - so there is nothing to stash and nothing to forget to restore.
+     poseOverlay is left alone for the same reason and comes back as it was. */
+  clearSel(); selBone=null; boneExtra=[]; boneGesture=null;
+  audKeys.clear(); audFlip=false; audBack=false;
+  audClip=null; audHold=false; audDir=1; audAcc=0; audT=0;
+  audDoc=audBuildDoc();
+  const w=cv.width/dpr, h=cv.height/dpr;
+  audPos={x:Math.round(w/2), y:groundY(h)};   // the centre guide, on the ground line
+  audBuildPanel();
+}
+function exitAudition(){
+  if(!audMode) return false;
+  audMode=false;
+  /* Null the Doc: it is a whole second copy of the document and there is no
+     reason to hold one between visits. */
+  audDoc=null; audAnchor=null; audKeys.clear(); audClip=null; audHold=false;
+  if(paletteMode==='audition') paletteMode='paint';
+  return true;
+}
+
+/* ------------------------------------------------------- the audition panel
+   A button per NON-EMPTY animation - the same test the animation picker makes.
+   An empty one has nothing to audition, and offering it is a button that
+   visibly does nothing.
+
+   A FIXED-FRAME kind (eyes, mouths) holds exactly one animation called Main,
+   which would give exactly one button that flickers through the expressions.
+   Those frames are a CONTRACT rather than a timeline, so on that kind the list
+   is the FRAMES BY NAME instead and clicking one holds that expression while
+   the sheet walks about. Same control, same place, the thing the kind has. */
+let audLitKey='';
+function audBuildPanel(){
+  const list=document.getElementById('audList');
+  if(!list) return;
+  list.textContent=''; audLitKey='';
+  if(!audDoc) return;
+  const fixed = !DT.framesFree(audDoc.kind);
+  document.getElementById('audListHead').textContent = fixed ? 'Expressions' : 'Animations';
+  const mk=(label,key,fn)=>{
+    const b=document.createElement('button');
+    b.className='pbtn'; b.textContent=label; b.dataset.audKey=key;
+    /* blur on the way out, for the reason the checkbox blur handler at the
+       bottom of the file already documents: a control that keeps the focus
+       swallows the next key aimed at the editor. */
+    b.addEventListener('click',e=>{ fn(); e.currentTarget.blur(); });
+    list.appendChild(b);
+  };
+  let n=0;
+  if(fixed){
+    ((audDoc.views[audDoc.viewNames[0]])||[]).forEach((f,i)=>{
+      if(!f || !f.length) return; n++;
+      mk(audFrameLabel(audDoc,i), 'f'+i, ()=>audShowFrame(i));
+    });
+  }else{
+    audDoc.anims.forEach((a,i)=>{
+      if(!audArt(audDoc,i)) return; n++;
+      mk(a.name, 'a'+i, ()=>audPlayClip(i));
+    });
+  }
+  document.getElementById('audNote').textContent = n ? '' :
+    'Nothing to audition yet - this drawing has no frames with anything in them.';
+  syncAudLit(true);
+}
+const audFrameLabel = (d,i) => ((d.frameNames||[])[i]) || String(i);
+
+/* Called from the render loop, and memoised on exactly what it shows, so sixty
+   frames a second cost one string compare - the bargain syncChrome makes. */
+function syncAudLit(force){
+  if(!audDoc) return;
+  const on = DT.framesFree(audDoc.kind) ? 'a'+audDoc.animIdx : 'f'+audDoc.frame;
+  const key = on+'|'+(audClip==null?'-':audClip);
+  if(!force && key===audLitKey) return;
+  audLitKey=key;
+  document.querySelectorAll('#audList .pbtn').forEach(b=>
+    b.classList.toggle('on', b.dataset.audKey===on));
+}
+function audPlayClip(i){
+  if(!audDoc) return;
+  /* The animation's OWN loop and ping-pong flags decide what happens next -
+     audStep reads them. Moving cancels it: audTick clears audClip on any input. */
+  audClip=i; audHold=false; audDir=1; audAcc=0;
+  DT.setAnim(audDoc,i); audDoc.frame=0;
+  syncAudLit(true); render();
+}
+function audShowFrame(i){           // a fixed kind: hold one named expression
+  if(!audDoc) return;
+  audClip=null; audHold=true; audDoc.frame=i;
+  syncAudLit(true); render();
+}
+
 /* ------------------------------------------------------- the mode switch
    The toolbar's second button. It shows the mode you are IN rather than the
    one it would take you to, and its menu opens to the right of the toolbar -
@@ -3227,14 +3583,24 @@ const MODES=[
   {id:'draw', label:'Draw', tip:'Mode: Draw',
    svg:'<path d="M4 20c0-3 2-4 3.5-4.5"/><path d="M8.5 15.5c-2 .8-3 2.2-3.2 4.2 2.2-.2 3.6-1.2 4.4-3.2"/><path d="M9.7 16.5 7.5 14.3 16 5.8a1.6 1.6 0 0 1 2.2 0l.5.5a1.6 1.6 0 0 1 0 2.2Z"/>'},
   {id:'skeleton', label:'Skeleton', tip:'Mode: Skeleton',
-   svg:'<circle cx="6.4" cy="6.4" r="2.6"/><circle cx="17.6" cy="17.6" r="2.6"/><path d="M8.4 8.4 15.6 15.6"/><circle cx="6.4" cy="17.6" r="2.2"/><path d="M8.5 16.4 15.9 9"/>'}
+   svg:'<circle cx="6.4" cy="6.4" r="2.6"/><circle cx="17.6" cy="17.6" r="2.6"/><path d="M8.4 8.4 15.6 15.6"/><circle cx="6.4" cy="17.6" r="2.2"/><path d="M8.5 16.4 15.9 9"/>'},
+  {id:'audition', label:'Audition', tip:'Mode: Audition',
+   svg:'<circle cx="13.4" cy="4.7" r="2.2"/><path d="M12.8 8.2 9.6 12l2.9 2.5.8 5.1"/><path d="M12.4 14.4 8.9 19.8"/><path d="M13.1 9.4l3.5 1.9 2-2.4"/><path d="M9.8 10.2 6.3 9"/>'}
 ];
 let modeMenuOpen=false;
-const curMode = () => boneMode ? 'skeleton' : 'draw';
+const curMode = () => audMode ? 'audition' : boneMode ? 'skeleton' : 'draw';
 function setMode(id){
   modeMenuOpen=false;
+  /* Skeleton is not OFFERED on a kind that cannot rig - its entry is hidden -
+     and this is the belt to that braces. */
+  if(id==='skeleton' && !canRig()) id='draw';
   if(id===curMode()){ syncPalette(); render(); return; }
-  if(id==='skeleton') enterBoneMode(); else exitBoneMode();
+  /* Leave whichever one is up FIRST, unconditionally, so skeleton -> audition
+     and audition -> skeleton both pass through a clean Draw rather than leaving
+     one mode's state standing under the other's. */
+  exitAudition(); exitBoneMode();
+  if(id==='skeleton') enterBoneMode();
+  else if(id==='audition') enterAudition();
   syncPalette(); render();
 }
 function buildModeMenu(){
@@ -3246,21 +3612,24 @@ function buildModeMenu(){
    changed - the menu, or a load that dropped bone mode. The mode has no key of its own:
    it is somewhere you go and stay, not something stepped through the way 1-4 are. */
 function syncModeBtn(){
-  const on = canRig();
-  if(!on) modeMenuOpen=false;
-  document.getElementById('modeWrap').classList.toggle('hidden',!on);
-  document.getElementById('modeSep') .classList.toggle('hidden',!on);
+  /* The switch is on EVERY kind now. Audition is offered on an eye or a mouth
+     sheet as much as on a character, so hiding the whole control where a rig
+     means nothing would take the only way into it away along with the
+     skeleton - it is the SKELETON ENTRY that goes instead, inside the menu. */
   const m = MODES.find(x=>x.id===curMode()) || MODES[0];
   const icon=document.getElementById('modeIcon');
   if(icon.dataset.mode!==m.id){ icon.innerHTML=m.svg; icon.dataset.mode=m.id; }
   document.getElementById('modeTip').textContent=m.tip;
   // setTool's .tool[data-tool] sweep never touches this button, so nothing
   // else will ever take the class off it.
-  document.getElementById('btnMode').classList.toggle('active', boneMode||modeMenuOpen);
+  document.getElementById('btnMode').classList.toggle('active', boneMode||audMode||modeMenuOpen);
   const menu=document.getElementById('modeMenu');
   menu.classList.toggle('hidden',!modeMenuOpen);
-  menu.querySelectorAll('.mopt').forEach(b=>
-    b.classList.toggle('on', b.dataset.mode===m.id));
+  const rig=canRig();
+  menu.querySelectorAll('.mopt').forEach(b=>{
+    b.classList.toggle('hidden', b.dataset.mode==='skeleton' && !rig);
+    b.classList.toggle('on', b.dataset.mode===m.id);
+  });
 }
 
 function setBoneTool(t){
@@ -3408,10 +3777,13 @@ function syncPalette(){
      a kind that can hold them. Bone mode hiding #paintPanel is also how the
      colour palette goes away - it lives inside it. */
   const onChar = canImport();
-  const lib   = paletteMode==='library' && onChar;
-  const bones = paletteMode==='bones'   && canRig();
+  /* Audition has no kind gate at all - it is offered on every kind - and it
+     wins over both of the others, which are Draw-mode panels. */
+  const aud   = paletteMode==='audition';
+  const lib   = paletteMode==='library' && onChar && !aud;
+  const bones = paletteMode==='bones'   && canRig() && !aud;
   const btn = document.getElementById('btnLibrary');
-  btn.classList.toggle('hidden',!onChar);
+  btn.classList.toggle('hidden', !onChar || aud);
   btn.classList.toggle('active',lib);
   syncModeBtn();
   /* Bone mode REPLACES the drawing tools, so none of them may sit there lit
@@ -3421,9 +3793,14 @@ function syncPalette(){
   /* Bone mode REPLACES the drawing tools: they hide and its own three take the
      same slot in the toolbar. The bone button itself stays put, so there is
      always a way back out. */
+  /* Audition DISABLES the drawing tools where bone mode REPLACES them: they
+     hide, and nothing takes their slot. Like bone mode it must NEVER assign to
+     `tool` - getElementById(TOOL_PANELS[tool]) at the top of this very function
+     throws on anything not in that map, and clicking a tool is itself the way
+     out (setTool calls exitAudition, as it already calls exitBoneMode). */
   document.querySelectorAll('.tool[data-tool]').forEach(b=>{
-    b.classList.toggle('hidden', bones);
-    b.classList.toggle('active', !bones && b.dataset.tool===tool);
+    b.classList.toggle('hidden', bones||aud);
+    b.classList.toggle('active', !bones && !aud && b.dataset.tool===tool);
   });
   document.querySelectorAll('.btool').forEach(b=>{
     b.classList.toggle('hidden', !bones);
@@ -3440,11 +3817,12 @@ function syncPalette(){
      posing left the sidebar showing the bone block and no shape controls at
      all. Pressing a bone clears the shape selection (in the overlay's own arm of
      pointerdown), so the two can never both be live and this can never flicker. */
-  const posing = !bones && !lib && canRig() && tool==='hand' && !selected &&
+  const posing = !bones && !lib && !aud && canRig() && tool==='hand' && !selected &&
                  (poseOverlay || selBone!=null) && rig.length>0;
-  document.getElementById('paintPanel').classList.toggle('hidden', lib||bones||posing);
+  document.getElementById('paintPanel').classList.toggle('hidden', lib||bones||posing||aud);
   document.getElementById('libPanel')  .classList.toggle('hidden',!lib);
   document.getElementById('bonePanel') .classList.toggle('hidden',!(bones||posing));
+  document.getElementById('audPanel')  .classList.toggle('hidden',!aud);
   if(bones||posing) syncBonePanel();
 }
 
@@ -4931,6 +5309,9 @@ function setTool(t){
   tool=t;
   closeLibrary();
   exitBoneMode();
+  /* Unreachable today - the tool buttons are hidden in audition and 1-4 are
+     swallowed - and right the moment a fifth route to a tool appears. */
+  exitAudition();
   document.querySelectorAll('.tool[data-tool]').forEach(b=>b.classList.toggle('active',b.dataset.tool===t));
   // Selection survives a tool change - that is what lets Smear and Eraser
   // reach a shape sitting underneath another one.
@@ -5246,7 +5627,14 @@ function syncFrames(){
   /* Skeleton mode is for BUILDING a rig, not for animating: every control in
      the bar - the chips, the onion, the skeleton checkbox - belongs to the
      drawing editor, so the whole pill goes away with it. */
-  document.getElementById('animbar').classList.toggle('hidden', boneMode);
+  /* ...and Audition hides it for a different reason: every control in it steps
+     or edits the document's frames, and audition is driving a SNAPSHOT of them.
+     The TOP bar goes with it, and only for audition - the view switch, the
+     onion, Copy to Back and Undo/Redo all act on the document being auditioned,
+     and Undo in particular would move it out from under a snapshot that is not
+     rebuilt until the next entry. */
+  document.getElementById('animbar').classList.toggle('hidden', boneMode||audMode);
+  document.getElementById('topbar') .classList.toggle('hidden', audMode);
   const box=document.getElementById('frames');
   /* With one eye or mouth object selected the bar lists ITS frames instead of
      the document's, and every button that edits the document's frames goes
@@ -6223,6 +6611,9 @@ function sceneFromJSON(raw){
   clearSel();
   paletteMode='paint';
   boneMode=false; boneTool='bdraw'; selBone=null; boneExtra=[]; boneGesture=null;
+  /* A load is one of the few things that can move the document out from under
+     an audition snapshot, so the mode goes with it. */
+  audMode=false; audDoc=null; audAnchor=null; audKeys.clear(); audClip=null;
   restoreOnions();
   skinHideBound=false; splitCache={key:'',art:0,rig:0};
   panX=0; panY=0;
@@ -6241,6 +6632,7 @@ function newScene(kind){
   // from an empty skeleton.
   rig=[]; restPose={}; bonePose=[]; anims=[]; animIdx=0; frameClip=null;
   bid=1; selBone=null; boneExtra=[]; boneMode=false; boneTool='bdraw';
+  audMode=false; audDoc=null; audAnchor=null; audKeys.clear(); audClip=null;
   restoreOnions();
   skinHideBound=false; splitCache={key:'',art:0,rig:0};
   panX=0; panY=0;
@@ -6487,6 +6879,10 @@ async function openDrawing(row){
    stage would have the ResizeObserver measure a zero-width canvas. */
 function showScreen(n){
   uiScreen=n;
+  /* Leaving the editor for the gallery or the login screen drops audition:
+     there is no reason to go on animating a canvas nobody can see, and the
+     drawing may well be a different one by the time we come back. */
+  if(n!=='draw' && exitAudition()) syncPalette();
   document.getElementById('loginScreen')  .classList.toggle('hidden', n!=='login');
   document.getElementById('galleryScreen').classList.toggle('hidden', n!=='gallery');
   if(n==='login'){
@@ -6964,7 +7360,8 @@ async function updateRef(oldKey){
 document.getElementById('modeWrap').addEventListener('pointerdown',e=>e.stopPropagation());
 document.getElementById('btnMode').addEventListener('click',e=>{
   e.stopPropagation();
-  if(!canRig()) return;
+  // No kind gate: Audition is offered on every kind, and the menu hides the
+  // Skeleton entry alone where a rig means nothing.
   modeMenuOpen=!modeMenuOpen;
   syncPalette();
 });
@@ -7744,6 +8141,10 @@ window.addEventListener('keydown',e=>{
     // ...but a text field keeps its own clipboard, or Ctrl+V in the library
     // search box pastes a shape onto the canvas instead of text into the box.
     if(e.target.tagName==='INPUT' && (k==='c'||k==='v'||k==='x'||k==='a')) return;
+    /* Z, Y, C, V and D all EDIT, and audition is driving a snapshot taken on
+       the way in - an undo behind its back would leave the two disagreeing
+       until the mode was next entered. Ctrl+S is not an edit and stays live. */
+    if(audMode && k!=='s') return;
     if(k==='z'){ e.preventDefault(); e.shiftKey?redo():undo(); }
     else if(k==='y'){ e.preventDefault(); redo(); }
     else if(k==='c'){ e.preventDefault(); if(!boneMode) copySelected(); }
@@ -7762,6 +8163,18 @@ window.addEventListener('keydown',e=>{
     const typing = (e.target.tagName==='INPUT' && tt!=='checkbox' && tt!=='radio')
                 || e.target.tagName==='SELECT';
     if(typing) return;
+  }
+  /* Audition owns the keyboard outright. Every branch below is an editor hotkey
+     for a document that is not being edited - and 1-4 in particular must NOT
+     fall through to setTool, which exits the mode: a mis-hit would drop you
+     back into Draw exactly as `5` once did to bone mode, which is why that
+     binding was removed. WASD and the arrows are the only live keys, plus
+     Escape, which is the keyboard's way back; the menu is the other. */
+  if(audMode){
+    if(e.key==='Escape'){ setMode('draw'); return; }
+    const d=AUD_KEYS[k];
+    if(d){ audKeys.add(d); e.preventDefault(); }   // preventDefault: arrows scroll
+    return;
   }
   /* Q and E walk the animation, Tab turns the drawing round, space plays it.
      Q used to be the front/back switch; it is the frames that you step through
@@ -7788,6 +8201,21 @@ window.addEventListener('keydown',e=>{
   else if(e.key==='ArrowRight'){e.preventDefault(); pauseAnim(); stepFrame( 1); render(); }
   else if(e.key==='Home'){ e.preventDefault(); panX=panY=0; render(); }
 });
+
+/* The first keyup listener in the file: nothing but audition has ever cared
+   that a key is being HELD. It is deliberately UNGUARDED - not by modalOpen,
+   not by uiScreen, not by the typing test, not by ctrlKey - because a guard
+   that swallows a keyup is precisely what leaves a direction stuck down for the
+   rest of the session. Press D, then press Ctrl, then release D: that keyup
+   arrives with ctrlKey true, and a guarded handler would never see it. It only
+   ever REMOVES, so running it in every state costs nothing, and
+   Set.delete(undefined) is a no-op for every other key on the keyboard.
+   Alt-Tab and a minimised window fire no keyup at all, which is what blur and
+   visibilitychange are for; a modal stealing the keyboard is handled in
+   audTick, since that one leaves this window focused. */
+window.addEventListener('keyup', e=>{ audKeys.delete(AUD_KEYS[e.key.toLowerCase()]); });
+window.addEventListener('blur', ()=>audKeys.clear());
+document.addEventListener('visibilitychange', ()=>{ if(document.hidden) audKeys.clear(); });
 
 /* ================================================================== boot */
 {
