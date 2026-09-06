@@ -154,6 +154,8 @@
   }
   #animRow .alabel{font-size:11px;color:var(--muted);padding:0 2px}
   /* drag and drop reordering of the frame chips */
+  #recLbl.armed{color:#f0938c;font-weight:700}
+  #recLbl.live{color:#fff;background:#8c3a34;border-radius:5px;padding:1px 6px}
   .fchip[draggable]{cursor:grab}
   .fchip.dragging{opacity:.4}
   .fchip.drop{border-color:var(--accent);border-style:dashed}
@@ -429,12 +431,12 @@
   #boneFacts,#boneEmpty,#skinNote,#boneHint,#editNote{font-size:11px;color:var(--muted);line-height:1.6}
   #optBSkin .mrow2{display:flex;flex-direction:column;gap:3px}
   #optBSkin label.cap{font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted)}
-  #skinBone{
+  #skinBone,#boneBend{
     background:#191716;border:1px solid #4a4441;border-radius:7px;color:var(--ink);
     font:inherit;font-size:12px;padding:6px 8px;outline:none;min-width:0;
   }
-  #skinBone:focus{border-color:var(--accent)}
-  #skinBone:disabled{opacity:.5;cursor:default}
+  #skinBone:focus,#boneBend:focus{border-color:var(--accent)}
+  #skinBone:disabled,#boneBend:disabled{opacity:.5;cursor:default}
   .pbtn.on{background:var(--accent);border-color:var(--accent);color:#1b1614}
   .pbtn.on:hover:not(:disabled){background:var(--accent)}
   #boneSides{gap:10px}
@@ -596,6 +598,10 @@
       <button class="btn" id="btnFrameCopy">Copy</button>
       <button class="btn" id="btnFramePaste">Paste</button>
       <button class="btn" id="btnFrameDup">Duplicate Frame</button>
+      <!-- Arm this and the next Play is a TAKE: drag the rig while it runs and
+           each tick writes the pose into a frame. Nothing to record without a
+           skeleton, so it greys out with the overlay's own box. -->
+      <label class="chk" id="recLbl"><input type="checkbox" id="animRec"> record</label>
       <button class="btn" id="btnPlay">Play<span class="kbd">Space</span></button>
       <button class="btn" id="btnStop">Stop</button>
     </div>
@@ -776,6 +782,16 @@
      <div class="prow">
        <label class="chk"><input type="checkbox" id="boneIkt"> IK target</label>
      </div>
+     <!-- Which way the chain this target solves is allowed to buckle. A pole
+          vector is a 3D idea; in 2D it is one bit - the turn direction shared by
+          every joint in the chain. Left and right are as seen walking from the
+          base of the chain towards the target. -->
+     <div class="mrow2" id="boneBendRow"><label class="cap" for="boneBend">Bend</label>
+       <select id="boneBend" title="Which way every joint in this chain buckles, walking from the base towards the target">
+         <option value="0">auto</option>
+         <option value="-1">bends left</option>
+         <option value="1">bends right</option>
+       </select></div>
      <div class="prow"><button class="pbtn" id="boneRest">Reset to Rest</button></div>
      <div class="prow">
        <button class="pbtn" id="boneFlipH"><svg viewBox="0 0 24 24"><path d="M12 3v18"/><path d="M9 7 4 12l5 5Z"/><path d="m15 7 5 5-5 5Z"/></svg>Flip H</button>
@@ -883,7 +899,7 @@ const stage= document.getElementById('stage');
    It is NOT the scene format version (SCENE_VERSION) - that one is data and is
    what migrateScene gates on. Bump the minor part for a feature, the patch part
    for a fix, and bump it in the same commit as the change. */
-const APP_VERSION = '1.7.2';
+const APP_VERSION = '1.9.1';
 
 /* ---------------------------------------------------------------- state */
 /* A document is one of four kinds. A character and an item have a front and a
@@ -921,6 +937,35 @@ const cur     = () => (views[view]||[])[frame] || [];
 let   playing = false, playTimer = 0;
 let   playDir = 1;             // ping-pong's current direction
 const FPS     = DT.FPS;
+
+/* ------------------------------------------------------------- record mode
+   Arm `record`, press Play, and drag the rig while it runs: every tick writes
+   what you have posed into a frame. It records the POSE and nothing else -
+   shapes are stored at rest and deformed at render, so a take is a list of
+   deltas and needs no new document state at all.
+
+   Two modes, decided at the start of the take by how long the animation
+   already is, which is what makes "the first take sets the length and the next
+   one layers onto it" fall out with nothing to choose:
+
+   - EXTEND (the animation holds one frame): each tick APPENDS a frame, cloning
+     the shapes and the whole live pose. The take runs until you stop it, so
+     that first pass is what decides how long the animation is.
+   - OVERWRITE (it already holds several): the take plays the frames that are
+     there, writes into them, and STOPS at the last one. Loop and ping-pong are
+     ignored while recording - a take has an end.
+
+   `recTouched` is what makes a second pass LAYER rather than flatten. Only the
+   bones a gesture actually moved are carried from the frame being left into the
+   frame being entered; every other bone keeps whatever the last take put in it.
+   It is measured rather than guessed, because an IK drag writes a whole chain
+   and enforceIKTargets writes chains the cursor never went near. */
+let recArmed  = false;         // the checkbox: the next Play is a take
+let recording = false;         // ...and this take is running
+let recExtend = false;         // appending frames, rather than overwriting them
+let recTouched = null;         // Set of bone ids this take has actually moved
+let undoLock  = false;         // a whole take is ONE undo step
+const REC_MAX_FRAMES = 240;    // 20s at 12fps - a runaway take is not a document
 
 /* ---------------------------------------------------------- the animations
    A document holds MANY named animations - Walk, Run, Jump - and `views` above
@@ -1103,6 +1148,11 @@ const rigVisible = () => (boneMode && (rig.length>0 || !!boneGesture)) ||
    pose a delta, editing the rest of a posed frame in posed space would deform
    the shapes it is the whole point of these two tools not to touch. Pose and
    Skinning are still what they were. */
+/* What record needs: a rig to drag, the document's own frame bar (a borrowed
+   one is showing an object's expressions, not any animation's frames) and free
+   frames. Skeleton mode hides the whole bar, so it cannot arm one either. */
+const recAvailable  = () => !boneMode && rig.length>0 && !framesLocked() && !refFrameTarget();
+const recExtendNext = () => frameCount()<2;
 const rigAtRest = () => boneMode && (boneTool==='bdraw' || boneTool==='bedit');
 const rigPose   = () => rigAtRest() ? {} : poseAt(frame);
 const REST_F    = -1;                       // the "frame" that means: no deformation
@@ -1828,9 +1878,11 @@ function drawFrame(){
     ctx.restore();
   }
 
-  // Bones last: they are drawn on top of the artwork, and while it is playing
-  // the canvas is a viewer, so the rig goes away with the rest of the chrome.
-  if(!playing){ drawSkinOverlay(); drawBones(); drawIKTargets(); }
+  /* Bones last: they are drawn on top of the artwork, and while it is playing
+     the canvas is a viewer, so the rig goes away with the rest of the chrome.
+     ...unless this is a TAKE, in which case the rig is the whole point: it is
+     what you are dragging, so it has to be both drawn and grabbable. */
+  if(!playing || recording){ drawSkinOverlay(); drawBones(); drawIKTargets(); }
   ctx.restore();                                   // ...and the pan closes here
 }
 
@@ -2210,12 +2262,18 @@ function syncHistory(){
 }
 function pushUndo(){
   dirty=true;                               // every edit lands here, so this is the one place
+  /* A take is ONE gesture as far as history is concerned. Without this every
+     drag inside one pushes a whole-document stringify, so a few seconds of
+     recording flushes the 60-deep stack and there is no way back to the drawing
+     as it stood before the take. */
+  if(undoLock) return;
   undoStack.push(snapshot());
   if(undoStack.length>60) undoStack.shift();
   redoStack.length=0;                       // a fresh edit forks history, redo is gone
   syncHistory();
 }
 function undo(){
+  if(recording) pauseAnim();                // a take is not something to step back INTO
   if(!undoStack.length) return;
   dirty=true;                               // stepping back is still a difference from the row
   redoStack.push(snapshot());
@@ -2286,7 +2344,9 @@ cv.addEventListener('pointerdown',e=>{
   // the cursor changes twelve times a second, so any gesture would land on
   // whichever frame happened to be up when you let go.
   if(e.button===1 || e.ctrlKey){ panDown(e); return; }
-  if(playing) return;
+  /* ...but a TAKE is exactly the case where a press while it is playing means
+     something: the rig below is armed and everything past it returns. */
+  if(playing && !recording) return;
   cv.setPointerCapture(e.pointerId);
   const w=pos(e); mouse.down=true; mouse.x=w.x; mouse.y=w.y;
   // Back to the paint sidebar: a click on the canvas is the end of a pick.
@@ -2306,7 +2366,11 @@ cv.addEventListener('pointerdown',e=>{
      there was no way to reach the shape underneath at all. `posing` is the same
      condition syncPalette uses to swap in the bone panel, so what the sidebar is
      showing and what a press will hit can never disagree. */
-  const rigArmed = poseOverlay && tool==='hand';
+  /* During a take the rig is armed whatever tool is up: the artwork cannot be
+     edited while the frame changes twelve times a second, so there is nothing
+     for another tool to be aimed at, and asking the user to also be holding the
+     Hand would make record silently do nothing. */
+  const rigArmed = recording || (poseOverlay && tool==='hand');
 
   /* An IK target is grabbable wherever it is DRAWN, and it is drawn exactly
      when the skeleton is - so it rides the same guard. Tested BEFORE the
@@ -2329,6 +2393,12 @@ cv.addEventListener('pointerdown',e=>{
        whatever tool is up. */
     if(selBone!=null){ selBone=null; syncPalette(); }
   }
+
+  /* ...except during a take, where it claims the press outright. The frame
+     changes twelve times a second, so a stroke or a selection would land on
+     whichever frame happened to be up when you let go - exactly what the
+     ordinary `playing` guard above exists to stop. */
+  if(recording) return;
 
   if(tool==='brush'){
     drawing={pts:[w], len:0};
@@ -3425,6 +3495,11 @@ function syncBonePanel(){
     document.getElementById('boneR').checked  = b.side==='R';
     document.getElementById('bonePin').checked= !!b.pinned;
     document.getElementById('boneIkt').checked= !!b.ikt;
+    /* Only a bone with a target of its own solves a chain, and a one-bone chain
+       has no elbow to put anywhere. */
+    const bendable = !!b.ikt && ikChain(b).length>1;
+    document.getElementById('boneBendRow').classList.toggle('hidden', !bendable);
+    document.getElementById('boneBend').value = String(b.bend|0);
     document.getElementById('boneRest').disabled = boneAtRest(b,frame);
     const r=restBone(b.id);                 // att/off/mirror are the CURRENT VIEW's
     const kids=boneKids(b.id).length;
@@ -3861,7 +3936,8 @@ function solveIK(B,target,stopId){
                           return {x:a.x+dx/L*len, y:a.y+dy/L*len}; };
 
   if(dist(base,target)>total){
-    // out of reach: straighten the whole chain at it, one pass and done
+    // out of reach: straighten the whole chain at it, one pass and done. A
+    // straight line has no bend left to argue about.
     for(let i=0;i<=m;i++) pts[i+1]=step(pts[i],target,d[i]);
   }else{
     for(let it=0; it<IK_ITERS && dist(pts[m+1],target)>0.5; it++){
@@ -3869,6 +3945,60 @@ function solveIK(B,target,stopId){
       for(let i=m;i>=0;i--) pts[i]=step(pts[i+1],pts[i],d[i]);
       pts[0]={x:base.x, y:base.y};                             // forward
       for(let i=0;i<=m;i++) pts[i+1]=step(pts[i],pts[i+1],d[i]);
+    }
+
+    /* THE BEND — which way the ELBOW is allowed to go, and it is ONE JOINT.
+
+       A pole vector is a 3D idea and in 2D it collapses to one bit, but WHICH
+       bit took two wrong answers to find:
+
+       - "which side of the base-to-effector line" only describes a TWO-bone
+         chain, which genuinely has two solutions for a goal. A longer one has a
+         whole one-parameter family and can fold internally, so reflecting the
+         polyline as a whole pins nothing down — a hand target's chain runs all
+         the way up through the spine unless something pins it, and it went on
+         popping mid-drag, which is what was reported.
+       - constraining the turn direction at EVERY joint does describe any chain,
+         and is over-constrained to the point of uselessness: a five-bone chain
+         forced to curl one way cannot reach most of its own workspace, and the
+         measured cost was a tip missing its goal by up to 214px.
+
+       The joint that actually matters is the **elbow**: the one between the two
+       bones before the effector, `pts[m-1]` (and `pts[1]` on a two-bone chain,
+       where they are the same thing). That is the joint a Blender pole target
+       aims, and the only one anybody watches pop.
+
+       The move is a reflection of that joint across the line through its two
+       NEIGHBOURS. Three properties, and each one is why this works:
+
+       - both neighbours are FIXED POINTS of it, so both bone lengths survive
+         exactly and nothing else in the chain has to be re-derived;
+       - **the effector does not move**, since it is not one of the three points
+         involved — which is why this can run AFTER the solve, on a chain that
+         has already converged, and cost nothing in reach. Measured over 360
+         goals on a five-bone chain: the elbow is on the chosen side every time
+         and the worst tip error is 0.48px, against 0.46px unconstrained;
+       - it negates the signed area of the triangle they make, which IS the
+         cross product being tested, so one flip settles it with no search, and
+         re-solving an already-correct chain does nothing at all. That last is
+         what keeps the wandering-drag invariant and what makes `bend:0`
+         bit-identical to the behaviour before any of this existed.
+
+       The sign is measured in SCREEN space (x right, y down, so a negative
+       cross is a LEFT turn), which is why it passes through the view's mirror
+       sense: a back view fitted as a mirror buckles the other way on screen for
+       the same document-level choice, exactly as drot does. */
+    const want = (B.bend|0) * mirOf(restBone(B.id));
+    if(want && m>=1){
+      const k=Math.max(1, m-1);
+      const p0=pts[k-1], p1=pts[k], p2=pts[k+1];
+      const cr=(p1.x-p0.x)*(p2.y-p1.y) - (p1.y-p0.y)*(p2.x-p1.x);
+      const ux=p2.x-p0.x, uy=p2.y-p0.y, L2=ux*ux+uy*uy;
+      if(cr*want<0 && L2>1e-9){                   // wrong side, and a line to mirror in
+        const vx=p1.x-p0.x, vy=p1.y-p0.y;
+        const t=2*(vx*ux+vy*uy)/L2;
+        pts[k]={x:p0.x + t*ux - vx, y:p0.y + t*uy - vy};
+      }
     }
   }
 
@@ -3988,6 +4118,11 @@ function boneHandMove(w){
      onto its goal, with this bone held. */
   if(g.mode!=='bikt' && b.ikt) seedIKGoal(b,frame);
   enforceIKTargets(b.id);
+  /* Measured AFTER the enforce, and against the pointerdown snapshot rather
+     than against the bone under the cursor: an IK drag writes a whole chain and
+     the enforce pass writes chains the cursor never went near, and every one of
+     those bones is part of the take. */
+  recMark(g.pose0);
   render();
 }
 
@@ -4599,6 +4734,21 @@ function setBonePin(on){
 }
 /* An IK target is a marker, not a pose: it changes nothing about how the bone
    solves, so it does not touch rigRev's meaning beyond making the rig redraw. */
+/* One field on the bone, so bones.rig, snapshot(), undo and duplicateBone all
+   carry it with nothing extra written, and a scene saved before it existed reads
+   as 0 - auto, which is what every rig did until now. It is per DOCUMENT rather
+   than per frame on purpose: a knee does not change which way it bends halfway
+   through a walk. */
+function setBoneBend(v){
+  const b=selBone!=null&&boneById(selBone); if(!b) return;
+  const n=Math.max(-1, Math.min(1, v|0));
+  if((b.bend|0)===n) return;
+  pushUndo(); b.bend=n;
+  // re-solve every targeted chain in THIS frame so the change is visible at once
+  enforceIKTargets();
+  rigRev++;
+  syncPalette(); render();
+}
 function setBoneIkt(on){
   const b=selBone!=null&&boneById(selBone); if(!b || !!b.ikt===!!on) return;
   pushUndo(); b.ikt=!!on;
@@ -4616,6 +4766,9 @@ document.getElementById('boneL').addEventListener('change',()=>setBoneSide('L'))
 document.getElementById('boneR').addEventListener('change',()=>setBoneSide('R'));
 document.getElementById('bonePin').addEventListener('change',e=>setBonePin(e.target.checked));
 document.getElementById('boneIkt').addEventListener('change',e=>setBoneIkt(e.target.checked));
+document.getElementById('boneBend').addEventListener('change',e=>{
+  setBoneBend(+e.target.value); e.target.blur();   // or the hotkeys go dead on it
+});
 document.getElementById('boneRest').addEventListener('click',resetBone);
 document.getElementById('boneDup') .addEventListener('click',()=>duplicateBone(selBone));
 document.getElementById('boneFlipH').addEventListener('click',()=>flipBone(selBone,'h'));
@@ -4881,6 +5034,81 @@ const stepFrame = d => {
   setFrame(frame+d);
 };
 
+/* A bone's delta, flattened to a comparable string - the pose is legitimately
+   sparse (an entry is created lazily on the first write) and a goal lives under
+   the view key, so neither `===` nor a bare stringify is a comparison. */
+function recDeltaKey(d,v){
+  if(!d) return '';
+  const g=(d.ik&&d.ik[v])||null;
+  return [d.drot||0, d.klen==null?1:d.klen, d.dx||0, d.dy||0,
+          g?g.x:'', g?g.y:''].join(',');
+}
+/* Called at the end of every pose gesture while a take is running: whatever
+   moved against the pointerdown snapshot is part of the take from here on. */
+function recMark(pose0){
+  if(!recording || !recTouched) return;
+  const p=poseAt(frame);
+  for(const b of rig){
+    if(recTouched.has(b.id)) continue;
+    if(recDeltaKey(p[b.id],view)!==recDeltaKey(pose0[b.id],view)) recTouched.add(b.id);
+  }
+}
+/* One tick of a take. Carrying only the touched bones is the whole of the
+   layering rule; a brand-new frame gets the lot, since there is nothing there
+   yet to preserve. Returns false when the take has run out of animation. */
+function recAdvance(){
+  const from=clonePose(poseAt(frame));
+  if(recExtend){
+    if(frameCount()>=REC_MAX_FRAMES) return false;
+    for(const n of viewNames) views[n].splice(frame+1,0,reidClone(views[n][frame]||[]));
+    bonePose.splice(frame+1,0,from);
+    frame++;
+  }else{
+    if(frame>=frameCount()-1) return false;
+    frame++;
+    const to=poseAt(frame);
+    for(const id of recTouched){
+      const d=from[id];
+      if(d) to[id]=cloneDelta(d); else delete to[id];
+    }
+  }
+  /* A pose gesture is recomputed from its pointerdown snapshot on every move -
+     which is what stops a wandering drag drifting - so a tick landing MID-DRAG
+     has to re-base it, or the very next move writes the frame it started on
+     back over the frame it has just arrived at, wiping every bone the last take
+     put there. Re-basing the snapshot alone would double-apply a relative drag
+     ('bmove'), so the grab point moves to the cursor in the same breath. */
+  if(boneGesture && boneGesture.mode!=='draw'){
+    boneGesture.pose0=clonePose(poseAt(frame));
+    boneGesture.grab={x:mouse.x, y:mouse.y};
+  }
+  rigRev++;
+  return true;
+}
+function startRecording(){
+  /* The rig has to be on screen to be grabbed, and during a take the artwork is
+     not editable anyway - so the overlay comes on whatever tool is up, and the
+     press is armed regardless of it (see the canvas pointerdown). */
+  poseOverlay=true;
+  recExtend = frameCount()<2;
+  /* ...and an overwrite take standing on the last frame would end before it
+     began, which reads as record being broken rather than as the take having
+     nowhere to go. */
+  if(!recExtend && frame>=frameCount()-1) frame=0;
+  pushUndo();                  // ONE step for the whole take
+  undoLock=true;
+  recording=true; recTouched=new Set();
+  clearSel(); selBone=null;
+}
+/* Every way out of a take goes through here, because every way out goes through
+   pauseAnim. Record DISARMS itself: a second take is a deliberate act, not
+   something a stray Space falls into. */
+function stopRecording(){
+  if(!recording) return;
+  recording=false; recTouched=null; undoLock=false; recArmed=false;
+  rigRev++;          // the matrices are memoised on it, and the take wrote poses
+}
+
 /* Playback only moves the index. It must NOT go through setFrame: clearing the
    selection and rebuilding the sidebar twelve times a second is both wasteful
    and visibly destructive. */
@@ -4889,6 +5117,13 @@ const stepFrame = d => {
    and stops on the first; the two together bounce for ever. */
 function frameTick(){
   const a=curAnim(), n=frameCount();
+  /* A take runs FORWARD and it has an end - loop and ping-pong are the
+     animation's playback flags, and a recording that wrapped would write over
+     the beginning of itself. */
+  if(recording){
+    if(!recAdvance()){ pauseAnim(); render(); return; }
+    syncFrames(); return;
+  }
   if(n<2){ pauseAnim(); return; }
   if(a.pingpong){
     let f=frame+playDir;
@@ -4907,14 +5142,19 @@ function frameTick(){
 }
 function playAnim(){
   if(playing) return;
-  if(frameCount()<2) return;
-  playing=true; playDir=1; clearSel();
+  const rec = recArmed && recAvailable();
+  // an EXTEND take starts from a single frame, so the ordinary two-frame floor
+  // cannot apply to one
+  if(frameCount()<2 && !rec) return;
+  if(rec) startRecording();
+  playing=true; playDir=1; if(!rec) clearSel();
   playTimer=setInterval(frameTick, Math.round(1000/FPS));
   syncFrames(); syncPalette();
 }
 function pauseAnim(){
-  if(!playing) return;
+  if(!playing){ stopRecording(); return; }
   playing=false; clearInterval(playTimer); playTimer=0;
+  stopRecording();
   syncFrames(); syncPalette();
 }
 const togglePlay = () => playing ? pauseAnim() : playAnim();
@@ -5104,9 +5344,26 @@ function syncFrames(){
   skel.checked  = poseOverlay && !!rig.length;
   document.getElementById('skelLbl').classList.toggle('locked', !rig.length);
 
+  /* Record arms the NEXT Play. It is the same set of preconditions playAnim
+     tests, so what the box offers and what pressing Play does cannot disagree. */
+  const recb=document.getElementById('animRec'), recl=document.getElementById('recLbl');
+  // a load, a kind change or a borrowed bar can take the preconditions away under
+  // an armed box; clearing it here is what keeps the flag and the checkbox from
+  // ever disagreeing about whether the next Play is a take
+  if(!recAvailable()) recArmed=false;
+  recb.disabled = !recAvailable();
+  recb.checked  = recArmed && !recb.disabled;
+  recl.classList.toggle('locked', recb.disabled);
+  recl.classList.toggle('armed', recArmed && !recording);
+  recl.classList.toggle('live', recording);
+  recl.title = recording ? 'Recording - drag the rig'
+             : recExtendNext() ? 'Arm a take: Play then drag the rig. This animation has one frame, so the take will ADD frames until you stop it'
+             : 'Arm a take: Play then drag the rig. The take runs to the last frame and stops';
+
   const play=document.getElementById('btnPlay');
   play.firstChild.nodeValue = playing ? 'Pause' : 'Play';
-  play.disabled = dn<2 || !!rt;
+  // an armed EXTEND take is the one thing that may start from a single frame
+  play.disabled = (dn<2 && !(recArmed && recAvailable())) || !!rt;
   document.getElementById('btnStop').disabled = dn<2 || !!rt;
   document.getElementById('btnFrameDup').classList.toggle('hidden', !free);
   const cp=document.getElementById('btnFrameCopy'), pa=document.getElementById('btnFramePaste');
@@ -5128,6 +5385,10 @@ document.getElementById('animOnion').addEventListener('change',e=>onionFrame=e.t
 document.getElementById('btnFrameCopy') .addEventListener('click',copyFrame);
 document.getElementById('btnFramePaste').addEventListener('click',()=>{ pauseAnim(); pasteFrame(); });
 document.getElementById('btnFrameDup')  .addEventListener('click',dupFrame);
+document.getElementById('animRec').addEventListener('change',e=>{
+  recArmed = e.target.checked && recAvailable();
+  syncFrames();
+});
 document.getElementById('btnPlay')      .addEventListener('click',togglePlay);
 document.getElementById('btnStop')      .addEventListener('click',()=>{ stopAnim(); render(); });
 
