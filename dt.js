@@ -27,7 +27,7 @@
 
   /* Stamped so a test can tell a reloaded page from a cached one - `-c-1`
      disables caching, but a stale dt.js reads as a baffling failure. */
-  DT.BUILD = '1.11.0';
+  DT.BUILD = '1.11.1';
 
   /* ------------------------------------------------------------- constants */
   const TAU = Math.PI * 2;
@@ -1075,11 +1075,29 @@
     const d = (a.depth || {})[v];
     if (d != null) return Math.max(0, Math.min(body.length, d | 0));
     const id = attachBoneId(doc, a);
-    if (id != null)
-      for (let i = body.length - 1; i >= 0; i--) {
-        const s = body[i];
+    const after = list => {
+      if (id == null || !list) return -1;
+      for (let i = list.length - 1; i >= 0; i--) {
+        const s = list[i];
         if (s && s.skin && s.skin.bones && s.skin.bones.indexOf(id) >= 0) return i + 1;
       }
+      return -1;
+    };
+    const k = after(body);
+    if (k >= 0) return k;
+    /* Nothing in THIS frame is bound to the bone. Skinning is per frame, so on a
+       drawing whose other animations were drawn rather than duplicated that is
+       every frame but the one the binding was done in - and falling straight to
+       "in front of everything" is why a worn object sat behind the hand in Idle
+       and in front of the whole body the moment you clicked Walk. Borrow the
+       slot from the RESTING animation's first frame, which is where the
+       documented workflow binds, so auto means the same thing everywhere. */
+    const rest = doc.anims && doc.anims[0] && doc.anims[0].views &&
+                 doc.anims[0].views[v] && doc.anims[0].views[v][0];
+    if (rest && rest !== body) {
+      const j = after(rest);
+      if (j >= 0) return Math.min(body.length, j);
+    }
     return body.length;
   }
 

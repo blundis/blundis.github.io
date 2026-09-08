@@ -437,9 +437,14 @@
                    text-overflow:ellipsis;white-space:nowrap}
   .attrow .attctl{display:flex;gap:4px;align-items:center}
   .attrow select{flex:1;min-width:0;font:inherit;font-size:11px;padding:2px}
-  .attbtn{padding:2px 6px;font-size:11px;line-height:1.5;cursor:pointer;
-          border:1px solid var(--line);border-radius:5px;background:#fff;color:inherit}
+  /* Same chrome as .pbtn, which is what every other button in the sidebar
+     wears: a white background under the panel's own light ink rendered the
+     labels invisible. */
+  .attbtn{padding:3px 8px;font-size:11px;line-height:1.5;cursor:pointer;font-family:inherit;
+          border:1px solid #4a4441;border-radius:6px;
+          background:var(--chrome-3);color:var(--ink)}
   .attbtn:disabled{opacity:.4;cursor:default}
+  .attrow .attdepth{font-size:11px;color:var(--muted);line-height:1.5}
   /* ---------- bone mode ---------- */
   #bonePanel{display:flex;flex-direction:column;gap:11px;min-height:0}
   #bonePanel .seg button{flex:1;padding:6px 8px;letter-spacing:0}
@@ -942,7 +947,7 @@ const stage= document.getElementById('stage');
    It is NOT the scene format version (SCENE_VERSION) - that one is data and is
    what migrateScene gates on. Bump the minor part for a feature, the patch part
    for a fix, and bump it in the same commit as the change. */
-const APP_VERSION = '1.11.0';
+const APP_VERSION = '1.11.1';
 
 /* ---------------------------------------------------------------- state */
 /* A document is one of four kinds. A character and an item have a front and a
@@ -1668,21 +1673,24 @@ function depthBtns(grp){
   return [{x:x, y:b.cy-DEPTH_R-4, dir: 1},
           {x:x, y:b.cy+DEPTH_R+4, dir:-1}];
 }
+/* One button. Split out so audition's worn objects draw the SAME control from
+   the same code rather than a lookalike - see attDepthBtns. */
+function drawDepthBtn(b, live){
+  ctx.beginPath(); ctx.arc(b.x,b.y,DEPTH_R,0,TAU);
+  ctx.fillStyle='#fff'; ctx.fill();
+  ctx.lineWidth=1.8; ctx.strokeStyle = live ? '#6ea8ff' : 'rgba(110,168,255,.35)';
+  ctx.stroke();
+  const d = b.dir>0 ? -1 : 1;               // chevron points the way it moves
+  ctx.beginPath();
+  ctx.moveTo(b.x-4.6, b.y-d*1.4); ctx.lineTo(b.x, b.y+d*3.4); ctx.lineTo(b.x+4.6, b.y-d*1.4);
+  ctx.lineWidth=2.1; ctx.lineCap='round'; ctx.lineJoin='round';
+  ctx.strokeStyle = live ? '#3f6fd8' : 'rgba(63,111,216,.3)';
+  ctx.stroke();
+}
 function drawDepthBtns(grp){
   ctx.save();
-  for(const b of depthBtns(grp)){
-    const live = canReorder(grp, b.dir);      // greyed out when it is already at the end
-    ctx.beginPath(); ctx.arc(b.x,b.y,DEPTH_R,0,TAU);
-    ctx.fillStyle='#fff'; ctx.fill();
-    ctx.lineWidth=1.8; ctx.strokeStyle = live ? '#6ea8ff' : 'rgba(110,168,255,.35)';
-    ctx.stroke();
-    const d = b.dir>0 ? -1 : 1;               // chevron points the way it moves
-    ctx.beginPath();
-    ctx.moveTo(b.x-4.6, b.y-d*1.4); ctx.lineTo(b.x, b.y+d*3.4); ctx.lineTo(b.x+4.6, b.y-d*1.4);
-    ctx.lineWidth=2.1; ctx.lineCap='round'; ctx.lineJoin='round';
-    ctx.strokeStyle = live ? '#3f6fd8' : 'rgba(63,111,216,.3)';
-    ctx.stroke();
-  }
+  // greyed out when there is nothing left to pass
+  for(const b of depthBtns(grp)) drawDepthBtn(b, canReorder(grp, b.dir));
   ctx.restore();
 }
 
@@ -3544,10 +3552,12 @@ function drawAudition(ts, w, h){
      round with the figure and is lit from the same side of the stage. */
   DT.drawFrameWithAttach(ctx, audDoc, DT.curFrame(audDoc),
                          {pframe:audDoc.frame, pview:audDoc.view});
+  audDrawDragPreview();              // ...the object being dragged in, ditto
   audDrawAttachChrome();             // selection box and handles, inside the transform
   ctx.restore();
   audDoc.lightFrom=lf; audDoc.lightTo=lt;
-  audDrawDragTether();               // ...the drag tether is in SCREEN space
+  audDrawDepthBtns();                // ...the chevrons and the tether are SCREEN space
+  audDrawDragTether();
   syncAudLit();                      // memoised: one string compare a frame
 }
 
@@ -3699,6 +3709,14 @@ function audPos2Doc(e){
   const X=e.clientX-r.left, Y=e.clientY-r.top, f=audFlip?-1:1;
   return { x: audAnchor.x + f*(X-audPos.x), y: audAnchor.y + (Y-audPos.y) };
 }
+/* ...and the way back, for chrome that must NOT be mirrored with the figure.
+   The depth chevrons are glyphs rather than artwork, so they are drawn (and hit
+   tested) in screen space, exactly as the drag tether already is. */
+function audDoc2Screen(p){
+  if(!audAnchor) return {x:p.x, y:p.y};
+  const f=audFlip?-1:1;
+  return { x: audPos.x + f*(p.x-audAnchor.x), y: audPos.y + (p.y-audAnchor.y) };
+}
 const audAttachById = id => attach.find(a=>a.id===id) || null;
 const audBoneNow = () => DT.boneWorld(audDoc, DT.poseAt(audDoc, audDoc.frame), audDoc.view);
 
@@ -3777,21 +3795,30 @@ function attNearestBone(p){
 
 function attSyncAll(){ audBuildAttachList(); syncChrome(); render(); }
 
-/* Wear a fetched drawing on a bone, placing it where it was dropped. */
-function attDrop(built, boneId, p){
-  const W=audBoneNow(), w=W.get(boneId);
-  if(!w) return;
+/* Everything a drop would write, minus the id. The PREVIEW under the cursor
+   goes through this too, so what is shown mid-drag and what lands on release
+   cannot describe different placements. */
+function attRecordFor(built, boneId, p, W){
+  const w=(W||audBoneNow()).get(boneId);
+  if(!w) return null;
   const inv=DT.attachInvert(w, p, 0);
   const bx=attRefBox(built.key) || {w:built.bw, h:built.bh};
   const r=cv.getBoundingClientRect();
   // the same rule importRef uses: a quarter of the stage at most, never blown up
   const fit=Math.min(1, (Math.min(r.width,r.height)*0.25)/Math.max(bx.w,bx.h));
+  return { key:built.key, drawingId:built.entry.drawingId, rev:built.entry.rev,
+           kind:built.entry.kind, title:built.entry.title, frame:0, follow:false,
+           boneId:boneId, bone:(DT.boneById(audDoc,boneId)||{}).name||'',
+           av:audDoc.view,                     // the view it was authored in
+           att:inv.att, off:inv.off, rot:0, scale:fit, depth:{} };
+}
+
+/* Wear a fetched drawing on a bone, placing it where it was dropped. */
+function attDrop(built, boneId, p){
+  const rec=attRecordFor(built, boneId, p);
+  if(!rec) return;
   pushUndo();
-  const a={ id:aid++, key:built.key, drawingId:built.entry.drawingId, rev:built.entry.rev,
-            kind:built.entry.kind, title:built.entry.title, frame:0, follow:false,
-            boneId:boneId, bone:(DT.boneById(audDoc,boneId)||{}).name||'',
-            av:audDoc.view,                    // the view it was authored in
-            att:inv.att, off:inv.off, rot:0, scale:fit, depth:{} };
+  const a=Object.assign({id:aid++}, rec);
   attach.push(a);
   audSel=a.id;
   attSyncAll();
@@ -3825,10 +3852,10 @@ function attRebind(id, boneId){
    chevrons it passes every body shape the object does not overlap and stops on
    the first it does - stepping one at a time through a torso is exactly the
    tedium that rule exists to remove. */
-function attBump(id, dir){
-  const a=audAttachById(id); if(!a || !audDoc) return;
+function attBumpTo(a, dir){
+  if(!a || !audDoc) return null;
   const v=audDoc.view, body=DT.curFrame(audDoc);
-  const pl=attNow(a); if(!pl) return;
+  const pl=attNow(a); if(!pl) return null;
   const mine=attWorldBox(pl);
   let slot=DT.attachSlot(audDoc, a, body, v), moved=false;
   while(true){
@@ -3841,9 +3868,16 @@ function attBump(id, dir){
     moved=true;
     if(slot<=0 || slot>=body.length) break;
   }
-  if(!moved) return;
+  return moved ? slot : null;
+}
+/* ...and nothing left to pass greys the chevron out, exactly as it does for a
+   shape: that, and not the end of the list, is what a dead arrow means. */
+const attCanBump = (a,dir) => attBumpTo(a,dir)!=null;
+function attBump(id, dir){
+  const a=audAttachById(id); if(!a) return;
+  const slot=attBumpTo(a,dir); if(slot==null) return;
   pushUndo();
-  a.depth=a.depth||{}; a.depth[v]=slot;
+  a.depth=a.depth||{}; a.depth[audDoc.view]=slot;
   attSyncAll();
 }
 function attAuto(id){
@@ -3862,6 +3896,36 @@ function shapeWorldBox(s){
 }
 const boxesHit = (a,b) => !(a.x1<b.x0 || b.x1<a.x0 || a.y1<b.y0 || b.y1<a.y0);
 
+/* The depth chevrons, off the RIGHT of the selected attachment's screen box -
+   the editor's own depth control, in the one other place in the app that has a
+   draw order to argue with. Same geometry, same drawing, same greying rule and
+   the same overlap-skipping bump behind them, so there is nothing new to learn.
+   Screen space: the figure's transform may be mirrored and a mirrored chevron
+   points the wrong way. */
+function attDepthBtns(a){
+  const pl=a?attNow(a):null; if(!pl) return [];
+  const b=bbox([{x:-pl.box.w/2,y:-pl.box.h/2},{x:pl.box.w/2,y:-pl.box.h/2},
+                {x:pl.box.w/2,y:pl.box.h/2},{x:-pl.box.w/2,y:pl.box.h/2}]
+               .map(p=>audDoc2Screen(attToDoc(pl,p))));
+  /* Clear the HANDLES, not just the box - the editor's own rule, and for the
+     same reason: the rotate handle stands off the box and the scale handle sits
+     on a corner, so on a turned object either can be the rightmost thing there
+     is and an arrow lands straight on top of it. */
+  let right=b.x1;
+  for(const h of [attRotHandle(pl), attSclHandle(pl)])
+    right=Math.max(right, audDoc2Screen(h).x + ATT_HIT);
+  const x=right+DEPTH_R+9;
+  return [{x:x, y:b.cy-DEPTH_R-4, dir: 1},
+          {x:x, y:b.cy+DEPTH_R+4, dir:-1}];
+}
+function audDrawDepthBtns(){
+  if(!audMode || !audDoc || audSel==null) return;
+  const a=audAttachById(audSel); if(!a) return;
+  ctx.save();
+  for(const b of attDepthBtns(a)) drawDepthBtn(b, attCanBump(a,b.dir));
+  ctx.restore();
+}
+
 /* ------------------------------------------------- the gestures on the canvas
    The ONLY press audition takes. It returns immediately unless it lands on an
    attachment or one of its handles, so every other press is refused exactly as
@@ -3869,6 +3933,14 @@ const boxesHit = (a,b) => !(a.x1<b.x0 || b.x1<a.x0 || a.y1<b.y0 || b.y1<a.y0);
 function audAttachDown(e){
   if(!audDoc || !attach.length) return;
   if(e.button!==0) return;
+  /* The depth chevrons first, exactly as the Hand takes them first: they sit
+     clear of the box and its handles, so nothing else can want that spot. */
+  if(audSel!=null){
+    const sel=audAttachById(audSel), r=cv.getBoundingClientRect();
+    const s={x:e.clientX-r.left, y:e.clientY-r.top};
+    if(sel) for(const b of attDepthBtns(sel))
+      if(dist(b,s) < DEPTH_R+3){ attBump(sel.id, b.dir); return; }
+  }
   const p=audPos2Doc(e), h=attHit(p);
   if(!h){ if(audSel!=null){ audSel=null; attSyncAll(); } return; }
   audSel=h.a.id;
@@ -3962,8 +4034,9 @@ function audBuildAttachList(){
       : 'Only a drawing or an item can wear things.';
     return;
   }
-  note.textContent = attach.length ? '' : 'Drag an object here from the Library to wear it.';
-  const body = DT.curFrame(audDoc);
+  note.textContent = attach.length
+    ? 'Select one on the canvas to move, turn or scale it - the chevrons beside it layer it through the body, per view.'
+    : 'Drag an object here from the Library to wear it.';
   for(const a of attach){
     const row=document.createElement('div');
     row.className='attrow'+(a.id===audSel?' on':'');
@@ -3981,7 +4054,7 @@ function audBuildAttachList(){
       const o=document.createElement('option');
       // the SIDE is in the label because names are not unique - a humanoid has
       // two bones called "Hand", and a dropdown of two identical rows is useless
-      o.value=String(b.id); o.textContent=(b.name||('Bone '+b.id))+(b.side?' '+b.side:'');
+      o.value=String(b.id); o.textContent=boneLabel(b);
       if(b.id===DT.attachBoneId(audDoc,a)) o.selected=true;
       sel.appendChild(o);
     }
@@ -3989,21 +4062,31 @@ function audBuildAttachList(){
                                        e.target.blur(); });
     ctl.appendChild(sel);
 
-    /* Depth, in the view you are LOOKING at - so you turn the character round
-       and set the back view's layering while watching it. */
-    const slot=DT.attachSlot(audDoc,a,body,audDoc.view);
     const mk=(label,tip,fn,dis)=>{
       const b=document.createElement('button');
       b.className='attbtn'; b.textContent=label; b.title=tip; b.disabled=!!dis;
       b.addEventListener('click',e=>{ fn(); e.currentTarget.blur(); });
       ctl.appendChild(b);
     };
-    mk('⌃','Draw in front of more of the body', ()=>attBump(a.id,1),  slot>=body.length);
-    mk('⌄','Draw behind more of the body',      ()=>attBump(a.id,-1), slot<=0);
-    mk('Auto','Layer it with the shapes on its own bone', ()=>attAuto(a.id),
-       !(a.depth && a.depth[audDoc.view]!=null));
+    /* Depth is the CHEVRONS beside the object on the canvas now - the same
+       control, from the same code, as every other draw order in the editor.
+       All that is left here is a plain statement of where the layering came
+       from and the one button that gives it back to the automatic rule. */
+    const custom = !!(a.depth && a.depth[audDoc.view]!=null);
+    mk('Auto depth','Go back to layering it with the shapes bound to its own bone',
+       ()=>attAuto(a.id), !custom);
     mk('Detach','Take it off', ()=>attDetach(a.id));
     row.appendChild(ctl);
+
+    const dep=document.createElement('div');
+    dep.className='attdepth';
+    dep.textContent = custom
+      ? 'Depth: set by hand, in the '+viewLabel(audDoc.view).toLowerCase()+' view.'
+      : 'Depth: auto - drawn just in front of the shapes bound to '+
+        boneLabel(DT.boneById(audDoc,DT.attachBoneId(audDoc,a)))+'.';
+    dep.title='Select it on the canvas and use the chevrons beside it to move it '+
+              'through the body. Depth is per view.';
+    row.appendChild(dep);
     list.appendChild(row);
   }
 }
@@ -4042,6 +4125,46 @@ function audDrawAttachChrome(){
   ctx.restore();
 }
 
+/* The object itself, under the cursor, while a Library card is in flight. It is
+   drawn through the SAME record a drop would write (attRecordFor), so what you
+   see mid-drag is exactly what lands - the bone's own scale, angle and mirror
+   included, which is the whole reason the fetch is fired at pointerdown rather
+   than at the release. Before it arrives, or with no bone in range, there is
+   nothing honest to place, so it draws a dashed box the size the artwork will
+   be (or a default) at the cursor and the label under it says which case it is.
+   INSIDE the figure's transform, like the attachments themselves. */
+function audDrawDragPreview(){
+  if(!audDrag || !audDoc) return;
+  const d=audDrag;
+  ctx.save();
+  ctx.globalAlpha=0.62;
+  if(d.built){
+    const W=audBoneNow();
+    const rec=d.bone!=null ? attRecordFor(d.built, d.bone, d.p, W) : null;
+    const pl=rec ? DT.attachXform(audDoc, rec, W, audDoc.view) : null;
+    /* NOT ghosted: drawShape ASSIGNS globalAlpha rather than multiplying it, so
+       an alpha set out here is thrown away and `ghost` is 0.13 - which for a
+       thing you are aiming is invisible. It is drawn as it will land, and the
+       tether, the lit bone and the label are what say a drag is in flight. */
+    if(pl){ DT.drawRefShape(ctx, audDoc, DT.attachShape(rec, pl), {});
+            ctx.restore(); return; }
+    /* Fetched, but nowhere to put it: draw it flat at the cursor at the size it
+       would be, so a drag that has wandered off the figure still reads as the
+       object rather than as an empty box. */
+    const bx=attRefBox(d.built.key) || {w:d.built.bw, h:d.built.bh};
+    const r=cv.getBoundingClientRect();
+    const fit=Math.min(1, (Math.min(r.width,r.height)*0.25)/Math.max(bx.w,bx.h));
+    const e=d.built.entry;
+    DT.drawRefShape(ctx, audDoc,
+      DT.attachShape({key:d.built.key, drawingId:e.drawingId, rev:e.rev, kind:e.kind,
+                      title:e.title, frame:0, follow:false},
+                     {x:d.p.x, y:d.p.y, rot:0, sx:fit, sy:fit}),
+      {});
+    ctx.restore(); return;
+  }
+  ctx.restore();
+}
+
 /* The tether from the cursor to where the thing will ACTUALLY attach - the
    clamped projection onto the bone, not its origin. Screen space, because the
    cursor is: it is drawn after the figure's own transform has been closed. */
@@ -4066,6 +4189,29 @@ function audDrawDragTether(){
   }
   ctx.fillStyle= audDrag.bone!=null ? '#3E9DBE' : '#B45B4A';
   ctx.beginPath(); ctx.arc(c.x,c.y,5,0,TAU); ctx.fill();
+  /* ...and a placeholder for the moment before the artwork lands. The fetch is
+     a round trip, so without this the whole drag is a dot and a line and it is
+     not clear anything is happening at all. Screen space with the label, or the
+     text comes out mirrored the moment the figure is facing left. */
+  const d=audDrag;
+  if(!d.built){
+    ctx.strokeStyle= d.err ? '#B45B4A' : '#3E9DBE'; ctx.lineWidth=1.5;
+    ctx.setLineDash([5,4]);
+    ctx.strokeRect(c.x-24, c.y-24, 48, 48);
+    ctx.setLineDash([]);
+  }
+  const label = d.err ? 'could not load it'
+              : !d.built ? ((d.row&&d.row.title)||'Loading') + '...'
+              : d.bone==null ? 'no bone near enough'
+              : ((d.row&&d.row.title)||'Object')+' on '+
+                boneLabel(DT.boneById(audDoc, d.bone));
+  ctx.font='600 11px ui-sans-serif, system-ui, sans-serif';
+  ctx.textAlign='center'; ctx.textBaseline='middle';
+  const w=ctx.measureText(label).width+12, y=c.y+34;
+  ctx.globalAlpha=0.92; ctx.fillStyle='#2b2724';
+  ctx.beginPath(); ctx.rect(c.x-w/2, y-9, w, 18); ctx.fill();
+  ctx.globalAlpha=1; ctx.fillStyle= d.err ? '#E7A79A' : '#efe9e0';
+  ctx.fillText(label, c.x, y);
   ctx.restore();
 }
 
@@ -4274,7 +4420,13 @@ function syncPalette(){
   const onChar = canImport();
   /* Audition has no kind gate at all - it is offered on every kind - and it
      wins over both of the others, which are Draw-mode panels. */
-  const aud   = paletteMode==='audition';
+  /* ...and it is the MODE that decides this, never paletteMode: opening the
+     Library in audition sets paletteMode to 'library', and reading it here left
+     every drawing tool un-hidden underneath a mode that had just hidden them -
+     so a click on one dropped you out of audition the moment you had placed an
+     object. The panels below still swap on paletteMode; only the TOOLS and the
+     mode's own gates read the mode itself. */
+  const aud   = audMode;
   /* The Library is reachable from AUDITION too, and it is the one Draw-mode
      writer deliberately left open there - a card is dragged onto a bone to
      wear it. It needs a skeleton to hang off, so on a rigless drawing (or an
@@ -4322,7 +4474,7 @@ function syncPalette(){
   document.getElementById('paintPanel').classList.toggle('hidden', lib||bones||posing||aud);
   document.getElementById('libPanel')  .classList.toggle('hidden',!lib);
   document.getElementById('bonePanel') .classList.toggle('hidden',!(bones||posing));
-  document.getElementById('audPanel')  .classList.toggle('hidden',!aud);
+  document.getElementById('audPanel')  .classList.toggle('hidden',!(aud&&!lib));
   if(bones||posing) syncBonePanel();
 }
 
@@ -5360,7 +5512,10 @@ function unbindSelection(){
   bumpBind(); syncPalette(); render();
 }
 
-const boneLabel = b => (b.name||'Bone')+(b.side?' '+b.side:'');
+/* Names are NOT unique - a humanoid has two bones called Hand - so the SIDE is
+   in every label, or a dropdown of two identical rows is useless and the worn
+   object's depth line names a bone you cannot tell from its twin. */
+const boneLabel = b => !b ? 'its bone' : (b.name||('Bone '+b.id))+(b.side?' '+b.side:'');
 function syncSkinPanel(){
   if(boneTool!=='bskin') return;
   const g=selGroup();
