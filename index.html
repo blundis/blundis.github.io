@@ -947,7 +947,7 @@ const stage= document.getElementById('stage');
    It is NOT the scene format version (SCENE_VERSION) - that one is data and is
    what migrateScene gates on. Bump the minor part for a feature, the patch part
    for a fix, and bump it in the same commit as the change. */
-const APP_VERSION = '1.11.1';
+const APP_VERSION = '1.12.0';
 
 /* ---------------------------------------------------------------- state */
 /* A document is one of four kinds. A character and an item have a front and a
@@ -1556,7 +1556,7 @@ function hatchShade(b,s){ return DT.hatchShade(ctx, EDOC, b, s); }
    of expressions a game swaps between, not something that plays on its own - but
    an instance can be set to FOLLOW, and then it walks in step with whatever
    frame the parent is showing, wrapping when it is the shorter of the two. */
-function refFrames(lib){ return DT.refFrames(lib); }
+function refFrames(lib,vi){ return DT.refFrames(lib,vi); }
 function refFrameIndex(rf,lib,pframe){ return DT.refFrameIndex(rf,lib,pframe); }
 
 /* An imported drawing. Draw its frame through the reference's own transform,
@@ -3729,7 +3729,10 @@ function attRefBox(key){
   if(!e) return null;
   const hit=attBoxCache.get(e); if(hit) return hit;
   let b=null;
-  for(const fr of refFrames(e)) for(const s of fr||[]){
+  /* Over EVERY view, not just the first: the selection box and the handles wrap
+     whatever is being drawn, and a worn object draws its back view on the back. */
+  const all=[]; for(let i=0;i<DT.refViewKeys(e).length;i++) all.push(...refFrames(e,i));
+  for(const fr of all) for(const s of fr||[]){
     if(!s.pts || s.pts.length<2) continue;
     const bb=bbox(worldPts(s)), pad=(s.lw||0)/2+1;
     const x0=bb.x0-pad, y0=bb.y0-pad, x1=bb.x1+pad, y1=bb.y1+pad;
@@ -7929,6 +7932,13 @@ function buildRefEntry(data){
   const vOrder=(o.viewOrder||[]).filter(n=>Array.isArray((a0.views||{})[n]));
   if(!vOrder.length) throw new Error('That drawing has no views.');
   const frames=JSON.parse(JSON.stringify(a0.views[vOrder[0]]));
+  /* ...and every OTHER view after it, so a worn object can show its back when
+     the character it is on turns round. Only a worn object ever asks for one -
+     a `ref` shape placed in a frame is still a stamp of the first view - and
+     the entry keeps `main` first, so every existing reader is unaffected and an
+     entry saved before this simply has nothing to offer. It is not a format
+     change: a scene's `refs` entries already hold a views OBJECT. */
+  const rest=vOrder.slice(1).map(n=>JSON.parse(JSON.stringify(a0.views[n])));
 
   /* ONE shared offset for every frame - centring each frame on its own bbox
      would make them jitter against each other. The union of all the frames is
@@ -7949,6 +7959,13 @@ function buildRefEntry(data){
   const ox=(x0+x1)/2, oy=(y0+y1)/2;
   const bw=Math.max(1,x1-x0), bh=Math.max(1,y1-y0);
   for(const fr of frames) for(const s of fr){ s.x-=ox; s.y-=oy; }
+  /* The SAME offset for the other views, never one of their own: front and back
+     are authored in one canvas and it is that alignment which makes them two
+     sides of one object. The box and the offset both stay the first view's, so
+     an ordinary import is bit-identical to what it was. */
+  for(const v of rest) for(const fr of v) for(const s of fr){
+    delete s.id; delete s.skin; s.x-=ox; s.y-=oy;
+  }
 
   /* ownerId is what decides whether this document may be edited in place, and
      cx/cy is the offset just taken out of every frame - the backdrop pass needs
@@ -7958,7 +7975,9 @@ function buildRefEntry(data){
                 ownerId:data.user_id||null, cx:ox, cy:oy,
                 author:(data.cs_users&&data.cs_users.username)||'',
                 frameNames:(o.frameNames||null), frameCount:Math.max(1,frames.length),
-                views:{ main:frames }, refs:(o.refs||{}) };
+                views:Object.assign({ main:frames },
+                       ...rest.map((fr,i)=>({[vOrder[i+1]]:fr}))),
+                refs:(o.refs||{}) };
   return { key:data.id+'@'+(data.rev||1), entry:entry, bw:bw, bh:bh };
 }
 

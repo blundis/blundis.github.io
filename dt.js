@@ -27,7 +27,7 @@
 
   /* Stamped so a test can tell a reloaded page from a cached one - `-c-1`
      disables caching, but a stale dt.js reads as a baffling failure. */
-  DT.BUILD = '1.11.1';
+  DT.BUILD = '1.12.0';
 
   /* ------------------------------------------------------------- constants */
   const TAU = Math.PI * 2;
@@ -620,7 +620,18 @@
      set of expressions a game swaps between, not something that plays on its
      own - but an instance can be set to FOLLOW, and then it walks in step with
      whatever frame the parent is showing, wrapping when it is the shorter. */
-  function refFrames(lib) { return (lib.views || {})[Object.keys(lib.views || {})[0]] || []; }
+  /* An imported drawing's frames, for ONE of its views. An entry carries the
+     source's first view under `main` and whatever other views it had after it,
+     in the source's own order (see buildRefEntry) - so index 0 is exactly the
+     old single-view behaviour and an entry written before the second view
+     travelled simply clamps back to it. Only a WORN object asks for anything
+     but 0: a `ref` shape placed in a frame is a stamp of one view by design. */
+  function refViewKeys(lib) { return Object.keys(lib.views || {}); }
+  function refFrames(lib, vi) {
+    const ks = refViewKeys(lib);
+    if (!ks.length) return [];
+    return lib.views[ks[Math.min(Math.max(vi | 0, 0), ks.length - 1)]] || [];
+  }
   function refFrameIndex(rf, lib, pframe) {
     const frames = refFrames(lib), n = frames.length || 1;
     if (rf.follow) return ((pframe || 0) % n + n) % n;
@@ -646,7 +657,7 @@
     // REST_F is not a frame of anything - "follow" still means the frame you are on
     const ff = (o.pframe == null || o.pframe < 0) ? doc.frame : o.pframe;
     const fi = refFrameIndex(s.ref, lib, ff);
-    const fr = refFrames(lib)[fi];
+    const fr = refFrames(lib, s.ref.view)[fi];
     if (!fr || !fr.length) return;
     g.save();
     // A reference binds to one bone and moves rigidly - see posedPlacement.
@@ -1023,6 +1034,18 @@
      Negating sx instead is a DIFFERENT map, because diag(1,-1) = R(pi).diag(-1,1)
      - it is this reflection plus a half turn, so the blade would point back up
      the forearm. */
+  /* Which of the worn object's OWN views to draw, by INDEX against the body's:
+     the body's back view asks the object for its back. An object with one view
+     (a sheet, or anything imported before the second view travelled) clamps to
+     0, which is what every worn object did until now. */
+  function attachViewIdx(doc, a, v) {
+    const lib = doc.refLib && doc.refLib.get(a.key);
+    const n = lib ? refViewKeys(lib).length : 1;
+    if (n < 2) return 0;
+    const i = (doc.viewNames || []).indexOf(v);
+    return i < 0 ? 0 : Math.min(i, n - 1);
+  }
+
   function attachXform(doc, a, W, v) {
     const id = attachBoneId(doc, a);
     if (id == null) return null;
@@ -1032,8 +1055,18 @@
     const c = Math.cos(w.rot), n = Math.sin(w.rot);
     const t = (a.att || 0) * w.len, o = m * (a.off || 0);
     const s = a.scale || 1;
+    /* The REFLECTION stands in for the side of the object nobody drew. When the
+       object really does carry artwork for this view, the artist has drawn that
+       side - so it is placed by the bone's mirrored frame exactly as before and
+       NOT reflected on top of that, or a back view that is a mirrored fit would
+       mirror a back drawing which is itself the mirror of the front and show
+       the front face again. Same artwork as it was authored against, same
+       reflection as before: this is bit-identical for a one-view object. */
+    const vi = attachViewIdx(doc, a, v);
+    const art = (vi === attachViewIdx(doc, a, a.av || v)) ? m : 1;
     return { x: w.x + c * t - n * o, y: w.y + n * t + c * o,
-             rot: w.rot + m * (a.rot || 0), sx: s, sy: m * s, bone: id, w: w, m: m };
+             rot: w.rot + m * (a.rot || 0), sx: s, sy: art * s,
+             vi: vi, bone: id, w: w, m: m };
   }
 
   /* The inverse: a world point and a world angle back into the bone's frame.
@@ -1056,7 +1089,9 @@
     return { pts: [], x: pl.x, y: pl.y, rot: pl.rot, sx: pl.sx, sy: pl.sy,
              lw: 0, closed: true, colors: { outline: NONE, fill: NONE, shadow: NONE },
              ref: { key: a.key, drawingId: a.drawingId, rev: a.rev, kind: a.kind,
-                    title: a.title, frame: a.frame || 0, follow: !!a.follow } };
+                    title: a.title, frame: a.frame || 0, follow: !!a.follow,
+                    // which of the object's OWN views to draw - see attachViewIdx
+                    view: pl.vi || 0 } };
   }
 
   /* Where an attachment sits in the body's draw order, as an index INTO that
@@ -1180,7 +1215,8 @@
     HATCH_GAP, HATCH_WEIGHT, REF_MAX_DEPTH, paint,
     fillStyleFor, hatchShade, refFrames, refFrameIndex,
     drawShape, drawRefShape, drawFrameShapes,
-    attachBoneId, attachXform, attachInvert, attachShape, attachSlot,
+    attachBoneId, attachXform, attachInvert, attachShape, attachSlot, attachViewIdx,
+    refViewKeys,
     drawFrameWithAttach,
     SCENE_FORMAT, SCENE_VERSION, FPS, DOC_KINDS, STD_ANIMS,
     migrateScene, migrateRefEntry, migrateRefField,
