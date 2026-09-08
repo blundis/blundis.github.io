@@ -428,7 +428,18 @@
   #audPanel{display:flex;flex-direction:column;gap:11px;min-height:0}
   #audList{display:flex;flex-direction:column;gap:6px;margin-top:2px}
   #audList .pbtn{justify-content:flex-start}
-  #audHint,#audNote{font-size:11px;color:var(--muted);line-height:1.6}
+  #audHint,#audNote,#audAttNote{font-size:11px;color:var(--muted);line-height:1.6}
+  #audAttList{display:flex;flex-direction:column;gap:7px;margin-top:2px}
+  .attrow{display:flex;flex-direction:column;gap:5px;padding:6px;border:1px solid var(--line);
+          border-radius:8px;background:rgba(0,0,0,.02)}
+  .attrow.on{border-color:#3E9DBE;background:rgba(62,157,190,.09)}
+  .attrow .attname{font-size:12px;font-weight:600;cursor:pointer;overflow:hidden;
+                   text-overflow:ellipsis;white-space:nowrap}
+  .attrow .attctl{display:flex;gap:4px;align-items:center}
+  .attrow select{flex:1;min-width:0;font:inherit;font-size:11px;padding:2px}
+  .attbtn{padding:2px 6px;font-size:11px;line-height:1.5;cursor:pointer;
+          border:1px solid var(--line);border-radius:5px;background:#fff;color:inherit}
+  .attbtn:disabled{opacity:.4;cursor:default}
   /* ---------- bone mode ---------- */
   #bonePanel{display:flex;flex-direction:column;gap:11px;min-height:0}
   #bonePanel .seg button{flex:1;padding:6px 8px;letter-spacing:0}
@@ -822,6 +833,15 @@
        it; walking up shows the back view. Escape goes back to Draw.</div>
    </div>
    <div class="divider"></div>
+   <!-- Worn objects. Built by audBuildAttachList on entry and on every attach
+        edit - NOT from syncAudLit, which is the one memoised per-frame DOM
+        write and must stay a single string compare. -->
+   <div class="psec" id="audAttSec">
+     <h3>Attachments</h3>
+     <div id="audAttList"></div>
+     <div id="audAttNote"></div>
+   </div>
+   <div class="divider"></div>
    <div class="psec">
      <h3 id="audListHead">Animations</h3>
      <div id="audList"></div>
@@ -922,7 +942,7 @@ const stage= document.getElementById('stage');
    It is NOT the scene format version (SCENE_VERSION) - that one is data and is
    what migrateScene gates on. Bump the minor part for a feature, the patch part
    for a fix, and bump it in the same commit as the change. */
-const APP_VERSION = '1.10.0';
+const APP_VERSION = '1.11.0';
 
 /* ---------------------------------------------------------------- state */
 /* A document is one of four kinds. A character and an item have a front and a
@@ -1125,6 +1145,20 @@ let rig      = [];    // { id, name, side:''|'L'|'R', parent, pinned, ikt }
 let restPose = {};    // restPose[view][boneId] -> { len, rot, att, off, mx, my } (+x,y on a root)
 let bonePose = [];    // bonePose[frame][boneId] -> { drot, klen, dx?, dy?, ik:{view:{x,y}} }
 let bid      = 1;     // bone ids are a SEPARATE namespace from the shape uid
+/* Worn objects - a sword in the hand, a helmet on the head. ONE LIST PER
+   DOCUMENT: not per frame and not per animation, which is the whole difference
+   between this and a `ref` shape. A ref is artwork baked into one frame of one
+   animation; an attachment names a BONE and rides it through Idle, Walk and
+   Attack alike, in both views, because the rig is one per document.
+
+   Each entry is { id, key, drawingId, rev, kind, title, frame, follow,
+                   boneId, bone, av, att, off, rot, scale, depth:{view:n} }
+   - the placement is in the bone's own local frame (att along, off
+   perpendicular, rot relative), the artwork lives in refLib under `key` as it
+   does for a ref shape, and `depth` is a per-VIEW slot in the body's draw
+   order. See dt.js's attachXform for the maths and why the mirror is sy. */
+let attach   = [];
+let aid      = 1;     // ...and its own id namespace again
 let selBone  = null;
 /* ...and, in the SKINNING tool alone, the OTHER bones a shift-click has added to
    the selection. Auto-Attach was the only way a shape could end up on several
@@ -1150,6 +1184,8 @@ let boneTool = 'bdraw';          // 'bdraw' | 'bedit' | 'bskin' | 'bhand'
    read it and all three are reachable from boot. Everything else audition owns
    lives in one block further down and is only ever read from a function. */
 let audMode = false;
+let audUndoDepth = 0;   // how far back Ctrl+Z may step inside an audition visit
+let audRedoDepth = 0;   // ...and how far FORWARD, for the same reason
 /* The animation bar's "skeleton" box. It floats the rig over the ORDINARY editor
    as a set of draggable handles, so posing never needs bone mode - which is only
    for building a skeleton and skinning to it. */
@@ -1300,6 +1336,7 @@ DT.bindDoc(EDOC, {
   rig:       ()=>rig,          // let, reassigned wholesale - this is the point
   restPose:  ()=>restPose,     // ditto
   bonePose:  ()=>bonePose,     // ditto
+  attach:    ()=>attach,       // ditto - restore() and sceneFromJSON reassign it
   rigRev:    ()=>rigRev,       // so a bare `rigRev++` below keeps working
   bindRev:   ()=>bindRev,
   shading:   ()=>shading,
@@ -2274,9 +2311,14 @@ function snapshot(){
      document stringify, and carrying all three of rig/bind/pose is what makes
      every bone edit an ordinary undoable one with nothing extra written -
      a snapshot that forgets one of them looks fine until you redo. */
+  /* ...and the ATTACHMENTS with it, for exactly the same reason: a few hundred
+     bytes against a whole-document stringify, and it is what makes attaching,
+     nudging, re-layering and detaching ordinary undoable edits with nothing
+     extra written. It is also what lets audition edit them at all - see
+     enterAudition. */
   return JSON.stringify({anims:anims, animIdx:animIdx, view:view, frame:frame,
                          sel:selGroup().map(g=>g.id),
-                         rig:rig, rest:restPose, selBone:selBone});
+                         rig:rig, rest:restPose, selBone:selBone, attach:attach});
 }
 function restore(str){
   const snap=JSON.parse(str);
@@ -2284,6 +2326,7 @@ function restore(str){
      bone, and it is also what clamps the pose to the frame count the animation
      it is loading has decided. */
   rig=snap.rig||[]; restPose=snap.rest||{};
+  attach=snap.attach||[];
   for(const n of viewNames) if(!restPose[n]) restPose[n]={};
   anims = (Array.isArray(snap.anims) && snap.anims.length) ? snap.anims : defaultAnims(1);
   animIdx=0;
@@ -2377,12 +2420,17 @@ cv.addEventListener('auxclick',e=>e.preventDefault());
 cv.addEventListener('contextmenu',e=>{ if(e.ctrlKey) e.preventDefault(); });
 
 cv.addEventListener('pointerdown',e=>{
-  /* Audition takes no press at all: it is a viewer, its sidebar holds no text
-     field to commit, and the PAN goes with it - the character is drawn in
-     screen space above the pan transform, so panning would slide the paper out
-     from under a figure that stayed exactly where it was. The window-level
-     dismiss for the mode menu is a separate listener and still fires. */
-  if(audMode) return;
+  /* Audition takes no press on the DRAWING: it is a viewer of the body, its
+     sidebar holds no text field to commit, and the PAN goes with it - the
+     character is drawn in screen space above the pan transform, so panning
+     would slide the paper out from under a figure that stayed exactly where it
+     was. The window-level dismiss for the mode menu is a separate listener and
+     still fires.
+
+     The one exception is a WORN OBJECT, which is the only thing in this mode
+     there is to edit. audAttachDown returns immediately unless the press lands
+     on one or on one of its handles, so this stays as narrow as it reads. */
+  if(audMode){ audAttachDown(e); return; }
   /* A sidebar text field that is still focused has to be COMMITTED before
      anything else runs. The canvas is not focusable, so pressing it does not
      blur the field on its own - and this handler calls syncPalette -> syncMeta,
@@ -2585,6 +2633,8 @@ cv.addEventListener('pointerdown',e=>{
 });
 
 cv.addEventListener('pointermove',e=>{
+  // a worn object being nudged, turned or scaled - the only drag audition takes
+  if(audMode){ audAttachMove(e); return; }
   if(pan){ panX=e.clientX-pan.x; panY=e.clientY-pan.y; return; }
   const w=pos(e); mouse.x=w.x; mouse.y=w.y;
 
@@ -2668,6 +2718,7 @@ cv.addEventListener('pointermove',e=>{
 });
 
 function endStroke(){
+  if(audMode){ audAttachUp(); return; }
   if(pan){ pan=null; mouse.down=false; return; }
   if(boneMode || boneGesture){ bonePointerUp(); mouse.down=false; return; }
   if(carve && carve.mode==='smear')
@@ -3226,7 +3277,10 @@ let paletteMode='paint';       // 'paint' | 'library' | 'bones' - the sidebar sw
    whether it still owes a syncPalette. */
 function closeLibrary(){
   if(paletteMode!=='library') return false;
-  paletteMode='paint';
+  /* ...back to whichever sidebar owns the mode we are standing in. Audition
+     borrows the Library to drag worn objects in, so returning to 'paint' there
+     would leave the colour palette sitting over a running audition. */
+  paletteMode = audMode ? 'audition' : 'paint';
   return true;
 }
 
@@ -3342,6 +3396,19 @@ function audBuildDoc(){
      it sets no dirty flag and pushes no undo, and Save and Export both already
      call it for exactly the same reason. */
   const doc = DT.docFromScene(sceneToJSON());
+  /* The BODY is a snapshot and is never rebuilt while the mode is up - that is
+     the property audition's whole design rests on. The WORN OBJECTS are not:
+     they are bound as live getters over the editor's own bindings, exactly as
+     EDOC is, so attaching, nudging and detaching show at once with no rebuild
+     and no way for the two to disagree. Getters rather than an alias because
+     restore() reassigns `attach` wholesale and a snapshot of it would silently
+     detach - the same trap rig/restPose/bonePose already document.
+
+     refLib rides along for the same reason: docFromScene built a PRUNED copy,
+     so a key added by a drop after entry would not be in it and the attachment
+     would draw as nothing. It is a const Map mutated in place, and the only
+     thing that clears it is a load, which exits the mode anyway. */
+  DT.bindDoc(doc, { attach: ()=>attach, refLib: ()=>refLib });
   audIdle = audArt(doc,0) ? 0 : null;
   if(audIdle==null)
     for(let i=0;i<doc.anims.length;i++) if(audArt(doc,i)){ audIdle=i; break; }
@@ -3364,6 +3431,11 @@ function audTick(ts, w, h){
      above audition - so a key held when one opened would stay held for ever.
      One line here covers every stealer there is. */
   if(modalOpen || uiScreen!=='draw') audKeys.clear();
+  /* A worn object is placed against the CURRENT frame's bone, so a frame
+     advancing under a drag would have the thing being aimed at move away from
+     the cursor. Freeze while a gesture or a Library drag is in flight - the
+     figure holds its pose, which is what you want to place against anyway. */
+  if(audGesture || audDrag) return;
 
   let dx = (audKeys.has('right')?1:0) - (audKeys.has('left')?1:0);
   let dy = (audKeys.has('down') ?1:0) - (audKeys.has('up')  ?1:0);
@@ -3464,10 +3536,18 @@ function drawAudition(ts, w, h){
   ctx.translate(audPos.x, audPos.y);
   if(audFlip) ctx.scale(-1,1);
   ctx.translate(-an.x, -an.y);
-  DT.drawFrameShapes(ctx, audDoc, DT.curFrame(audDoc),
-                     {pframe:audDoc.frame, pview:audDoc.view});
+  /* One interleaved walk in place of drawFrameShapes: a worn object takes a
+     SLOT in the body's own draw order rather than being stacked on top of it,
+     so a sword in the near hand sits with that hand and a cape sits behind the
+     back. With nothing worn this is the plain call and costs what it always
+     did. It is INSIDE the flip and the light mirror, so an attachment turns
+     round with the figure and is lit from the same side of the stage. */
+  DT.drawFrameWithAttach(ctx, audDoc, DT.curFrame(audDoc),
+                         {pframe:audDoc.frame, pview:audDoc.view});
+  audDrawAttachChrome();             // selection box and handles, inside the transform
   ctx.restore();
   audDoc.lightFrom=lf; audDoc.lightTo=lt;
+  audDrawDragTether();               // ...the drag tether is in SCREEN space
   syncAudLit();                      // memoised: one string compare a frame
 }
 
@@ -3489,18 +3569,36 @@ function enterAudition(){
   clearSel(); selBone=null; boneExtra=[]; boneGesture=null;
   audKeys.clear(); audFlip=false; audBack=false;
   audClip=null; audHold=false; audDir=1; audAcc=0; audT=0;
+  audSel=null; audGesture=null; audDrag=null;
+  /* Where undo may step back to. An attach edit is a real undo step and the top
+     bar is hidden, so Ctrl+Z has to work in here - but stepping BELOW this
+     latch would undo a body edit made before the mode was entered, and audDoc
+     is a snapshot that is not rebuilt until the next entry. So the keyboard
+     refuses to go past it, and the two can never disagree. */
+  audUndoDepth = undoStack.length;
+  audRedoDepth = redoStack.length;
   audDoc=audBuildDoc();
   const w=cv.width/dpr, h=cv.height/dpr;
   audPos={x:Math.round(w/2), y:groundY(h)};   // the centre guide, on the ground line
   audBuildPanel();
+  audBuildAttachList();
+}
+/* Every piece of audition state back to nothing. It exists because the load and
+   new-scene paths used to open-code this and both drifted out of step with
+   exitAudition - CLAUDE.md flags exactly that. One function, three callers. */
+function audReset(){
+  /* Null the Doc: it is a whole second copy of the document and there is no
+     reason to hold one between visits. */
+  audDoc=null; audAnchor=null; audKeys.clear(); audClip=null; audHold=false;
+  audSel=null; audGesture=null;
+  if(audDrag){ window.removeEventListener('pointermove', audLibMove);
+               window.removeEventListener('pointerup', audLibUp); audDrag=null; }
 }
 function exitAudition(){
   if(!audMode) return false;
   audMode=false;
-  /* Null the Doc: it is a whole second copy of the document and there is no
-     reason to hold one between visits. */
-  audDoc=null; audAnchor=null; audKeys.clear(); audClip=null; audHold=false;
-  if(paletteMode==='audition') paletteMode='paint';
+  audReset();
+  if(paletteMode==='audition'||paletteMode==='library') paletteMode='paint';
   return true;
 }
 
@@ -3572,6 +3670,403 @@ function audShowFrame(i){           // a fixed kind: hold one named expression
   if(!audDoc) return;
   audClip=null; audHold=true; audDoc.frame=i;
   syncAudLit(true); render();
+}
+
+/* ==================================================== worn objects (attach)
+   An imported drawing WORN on a bone, rather than placed in a frame. The list
+   lives on the document (see `attach` beside `rig`); everything here is the
+   audition-mode UI over it - dragging one in from the Library, nudging it,
+   re-layering it and taking it off again.
+
+   This is the one writer audition leaves open, and the reason it is safe is
+   structural: audDoc is a snapshot of the BODY and is never rebuilt while the
+   mode is up, while `attach` and `refLib` are bound onto it as live getters
+   (see audBuildDoc). So an attach edit is an ordinary pushUndo() against a
+   list no other mode touches, and there is no path by which it can move
+   views/anims/bonePose/restPose/rig out from under that snapshot. */
+let audSel     = null;   // the selected attachment's id
+let audDrag    = null;   // a Library card in flight: {row,built,err,p,bone}
+let audGesture = null;   // {mode:'amove'|'arot'|'ascale', ...} - a pointerdown snapshot
+const ATT_HIT   = 9;     // handle pick radius, in document units
+const ATT_ROTH  = 26;    // ...and how far the rotate handle stands off the box
+const ATT_SNAP  = 220;   // a drop further than this from every bone finds none
+
+/* Audition draws ABOVE the pan, so a pointer coordinate must NOT go through
+   pos() - that subtracts panX/panY and would be wrong by exactly the pan. This
+   is the one funnel, so no call site can forget. */
+function audPos2Doc(e){
+  const r=cv.getBoundingClientRect();
+  const X=e.clientX-r.left, Y=e.clientY-r.top, f=audFlip?-1:1;
+  return { x: audAnchor.x + f*(X-audPos.x), y: audAnchor.y + (Y-audPos.y) };
+}
+const audAttachById = id => attach.find(a=>a.id===id) || null;
+const audBoneNow = () => DT.boneWorld(audDoc, DT.poseAt(audDoc, audDoc.frame), audDoc.view);
+
+/* The size of a worn object's artwork, cached OFF the entry rather than on it:
+   sceneToJSON writes the live refLib objects straight into the scene's `refs`,
+   so a field added here would be saved into every row. */
+const attBoxCache = new WeakMap();
+function attRefBox(key){
+  const e=refLib.get(key);
+  if(!e) return null;
+  const hit=attBoxCache.get(e); if(hit) return hit;
+  let b=null;
+  for(const fr of refFrames(e)) for(const s of fr||[]){
+    if(!s.pts || s.pts.length<2) continue;
+    const bb=bbox(worldPts(s)), pad=(s.lw||0)/2+1;
+    const x0=bb.x0-pad, y0=bb.y0-pad, x1=bb.x1+pad, y1=bb.y1+pad;
+    b = b ? {x0:Math.min(b.x0,x0), y0:Math.min(b.y0,y0),
+             x1:Math.max(b.x1,x1), y1:Math.max(b.y1,y1)} : {x0,y0,x1,y1};
+  }
+  const out = b ? {w:Math.max(1,b.x1-b.x0), h:Math.max(1,b.y1-b.y0)} : {w:40,h:40};
+  attBoxCache.set(e,out);
+  return out;
+}
+/* The placement of one attachment right now, plus its box - everything the
+   chrome and the hit test both need. */
+function attNow(a, W){
+  if(!audDoc) return null;
+  const pl=DT.attachXform(audDoc, a, W||audBoneNow(), audDoc.view);
+  if(!pl) return null;
+  pl.box=attRefBox(a.key) || {w:40,h:40};
+  return pl;
+}
+// the attachment's own local frame -> document space, and back
+const attToDoc   = (pl,p) => DT.toWorld(pl,p);
+const attToLocal = (pl,p) => DT.toLocal(pl,p);
+const attRotHandle = pl => attToDoc(pl,{x:0, y:-(pl.box.h/2 + ATT_ROTH/Math.abs(pl.sy||1))});
+const attSclHandle = pl => attToDoc(pl,{x:pl.box.w/2, y:pl.box.h/2});
+
+/* What a press in audition lands on. Handles first and only for the SELECTED
+   one, then any attachment's body, topmost (last drawn) first. */
+function attHit(p){
+  const W=audBoneNow();
+  const sel=audSel!=null?audAttachById(audSel):null;
+  if(sel){
+    const pl=attNow(sel,W);
+    if(pl){
+      if(dist(p,attRotHandle(pl))<ATT_HIT) return {a:sel, part:'arot', pl:pl};
+      if(dist(p,attSclHandle(pl))<ATT_HIT) return {a:sel, part:'ascale', pl:pl};
+    }
+  }
+  for(let i=attach.length-1;i>=0;i--){
+    const pl=attNow(attach[i],W); if(!pl) continue;
+    const l=attToLocal(pl,p);
+    if(Math.abs(l.x)<=pl.box.w/2 && Math.abs(l.y)<=pl.box.h/2)
+      return {a:attach[i], part:'amove', pl:pl};
+  }
+  return null;
+}
+
+/* The bone a drop lands on. Measured in DOCUMENT space after inverting the
+   screen transform once: the flip is a reflection and therefore an isometry,
+   so distance is the same either side of it and there is nothing left to get
+   wrong. Ties go to the SHORTER bone, so a hand wins over the forearm it hangs
+   off - the same reasoning as boneHit returning the child at a shared joint. */
+function attNearestBone(p){
+  if(!audDoc || !audDoc.rig.length) return null;
+  const W=audBoneNow();
+  let best=null, bd=1e9, bl=1e9;
+  for(const b of audDoc.rig){
+    const w=W.get(b.id); if(!w) continue;
+    const d=segDist(p, w, boneTip(w));
+    if(d<bd-0.001 || (Math.abs(d-bd)<=0.001 && w.len<bl)){ bd=d; bl=w.len; best=b.id; }
+  }
+  return bd<=ATT_SNAP ? best : null;
+}
+
+function attSyncAll(){ audBuildAttachList(); syncChrome(); render(); }
+
+/* Wear a fetched drawing on a bone, placing it where it was dropped. */
+function attDrop(built, boneId, p){
+  const W=audBoneNow(), w=W.get(boneId);
+  if(!w) return;
+  const inv=DT.attachInvert(w, p, 0);
+  const bx=attRefBox(built.key) || {w:built.bw, h:built.bh};
+  const r=cv.getBoundingClientRect();
+  // the same rule importRef uses: a quarter of the stage at most, never blown up
+  const fit=Math.min(1, (Math.min(r.width,r.height)*0.25)/Math.max(bx.w,bx.h));
+  pushUndo();
+  const a={ id:aid++, key:built.key, drawingId:built.entry.drawingId, rev:built.entry.rev,
+            kind:built.entry.kind, title:built.entry.title, frame:0, follow:false,
+            boneId:boneId, bone:(DT.boneById(audDoc,boneId)||{}).name||'',
+            av:audDoc.view,                    // the view it was authored in
+            att:inv.att, off:inv.off, rot:0, scale:fit, depth:{} };
+  attach.push(a);
+  audSel=a.id;
+  attSyncAll();
+}
+
+function attDetach(id){
+  const i=attach.findIndex(a=>a.id===id);
+  if(i<0) return;
+  pushUndo();
+  attach.splice(i,1);
+  if(audSel===id) audSel=null;
+  attSyncAll();
+}
+
+/* Re-bind to another bone, HOLDING the world placement, so the sword does not
+   teleport across the figure the moment the dropdown changes. */
+function attRebind(id, boneId){
+  const a=audAttachById(id); if(!a || !audDoc) return;
+  const W=audBoneNow(), pl=DT.attachXform(audDoc,a,W,audDoc.view), w=W.get(boneId);
+  if(!pl || !w) return;
+  pushUndo();
+  const inv=DT.attachInvert(w, pl, pl.rot);
+  a.boneId=boneId; a.bone=(DT.boneById(audDoc,boneId)||{}).name||'';
+  a.av=audDoc.view;                            // re-authored here, so the sense resets
+  a.att=inv.att; a.off=inv.off; a.rot=inv.rot;
+  attSyncAll();
+}
+
+/* Depth, per view. The first press FREEZES the resolved auto slot and then
+   steps from it, which is honest about what it is doing. Like the editor's own
+   chevrons it passes every body shape the object does not overlap and stops on
+   the first it does - stepping one at a time through a torso is exactly the
+   tedium that rule exists to remove. */
+function attBump(id, dir){
+  const a=audAttachById(id); if(!a || !audDoc) return;
+  const v=audDoc.view, body=DT.curFrame(audDoc);
+  const pl=attNow(a); if(!pl) return;
+  const mine=attWorldBox(pl);
+  let slot=DT.attachSlot(audDoc, a, body, v), moved=false;
+  while(true){
+    const next=slot+dir;
+    if(next<0 || next>body.length) break;
+    // the shape we would step OVER lies just below (up) or at (down) the slot
+    const s=body[dir>0 ? slot : slot-1];
+    slot=next;
+    if(s && s.pts && s.pts.length>1 && boxesHit(mine, shapeWorldBox(s))){ moved=true; break; }
+    moved=true;
+    if(slot<=0 || slot>=body.length) break;
+  }
+  if(!moved) return;
+  pushUndo();
+  a.depth=a.depth||{}; a.depth[v]=slot;
+  attSyncAll();
+}
+function attAuto(id){
+  const a=audAttachById(id); if(!a || !audDoc) return;
+  if(!a.depth || a.depth[audDoc.view]==null) return;
+  pushUndo();
+  delete a.depth[audDoc.view];
+  attSyncAll();
+}
+const attWorldBox = pl => bbox([{x:-pl.box.w/2,y:-pl.box.h/2},{x:pl.box.w/2,y:-pl.box.h/2},
+                                {x:pl.box.w/2,y:pl.box.h/2},{x:-pl.box.w/2,y:pl.box.h/2}]
+                               .map(p=>attToDoc(pl,p)));
+function shapeWorldBox(s){
+  const b=bbox(DT.worldPts(audDoc,s,audDoc.frame,audDoc.view)), pad=(s.lw||0)/2;
+  return {x0:b.x0-pad, y0:b.y0-pad, x1:b.x1+pad, y1:b.y1+pad};
+}
+const boxesHit = (a,b) => !(a.x1<b.x0 || b.x1<a.x0 || a.y1<b.y0 || b.y1<a.y0);
+
+/* ------------------------------------------------- the gestures on the canvas
+   The ONLY press audition takes. It returns immediately unless it lands on an
+   attachment or one of its handles, so every other press is refused exactly as
+   it was before - the narrowest possible widening of that gate. */
+function audAttachDown(e){
+  if(!audDoc || !attach.length) return;
+  if(e.button!==0) return;
+  const p=audPos2Doc(e), h=attHit(p);
+  if(!h){ if(audSel!=null){ audSel=null; attSyncAll(); } return; }
+  audSel=h.a.id;
+  /* Recomputed from THIS snapshot on every move, exactly as every bone gesture
+     already is: sixty incremental deltas a second accumulate float drift, and
+     the placement is the document. */
+  audGesture={ mode:h.part, id:h.a.id, p0:p, a0:JSON.parse(JSON.stringify(h.a)),
+               pl0:h.pl, grab:{x:h.pl.x-p.x, y:h.pl.y-p.y} };
+  attSyncAll();
+}
+function audAttachMove(e){
+  if(!audGesture || !audDoc) return;
+  const a=audAttachById(audGesture.id); if(!a) return;
+  const p=audPos2Doc(e), g=audGesture, W=audBoneNow();
+  const id=DT.attachBoneId(audDoc,a), w=id!=null?W.get(id):null;
+  if(!w) return;
+  const m=DT.attachXform(audDoc,a,W,audDoc.view).m;
+  if(g.mode==='amove'){
+    const inv=DT.attachInvert(w, {x:p.x+g.grab.x, y:p.y+g.grab.y}, 0);
+    a.att=inv.att; a.off=m*inv.off;          // stored in the AUTHORING sense
+  }else if(g.mode==='arot'){
+    const d=Math.atan2(p.y-g.pl0.y, p.x-g.pl0.x) - Math.atan2(g.p0.y-g.pl0.y, g.p0.x-g.pl0.x);
+    a.rot=g.a0.rot + m*d;                    // dROT = m . d(a.rot), and m is +-1
+  }else if(g.mode==='ascale'){
+    const d0=dist(g.p0,g.pl0), d1=dist(p,g.pl0);
+    if(d0>1) a.scale=Math.max(0.02, g.a0.scale*(d1/d0));
+  }
+  render();
+}
+function audAttachUp(){
+  if(!audGesture) return;
+  audGesture=null;
+  attSyncAll();
+}
+
+/* ------------------------------------------------- dragging one in from the Library
+   Pointer-based rather than HTML5 drag-and-drop, which cannot draw on a canvas
+   mid-drag. The fetch is fired at pointerdown so the artwork can be previewed
+   under the cursor rather than popping in at the drop; nothing touches the
+   document until the release. */
+function audLibDown(e, row){
+  if(!audMode || !audDoc || !audDoc.rig.length) return false;
+  if(e.button!==0) return false;
+  e.preventDefault();
+  audDrag={row:row, built:null, err:'', p:audPos2Doc(e), bone:null};
+  fetchRefEntry(row).then(b=>{ if(audDrag && audDrag.row===row) audDrag.built=b; })
+                    .catch(err=>{ if(audDrag && audDrag.row===row)
+                                    audDrag.err=err.message||String(err); });
+  window.addEventListener('pointermove', audLibMove);
+  window.addEventListener('pointerup', audLibUp);
+  render();
+  return true;
+}
+function audLibMove(e){
+  if(!audDrag) return;
+  audDrag.p=audPos2Doc(e);
+  audDrag.bone=attNearestBone(audDrag.p);
+  render();
+}
+function audLibUp(e){
+  window.removeEventListener('pointermove', audLibMove);
+  window.removeEventListener('pointerup', audLibUp);
+  const d=audDrag; audDrag=null;
+  if(!d) return;
+  const r=cv.getBoundingClientRect();
+  const on = e.clientX>=r.left && e.clientX<=r.right && e.clientY>=r.top && e.clientY<=r.bottom;
+  const p=audPos2Doc(e), bone=attNearestBone(p);
+  if(!on || bone==null){ render(); return; }      // bailed: no pushUndo, nothing written
+  const go=b=>{ if(b) attDrop(b, bone, p); else render(); };
+  if(d.built) go(d.built);
+  else if(d.err){ alert(d.err); render(); }
+  else fetchRefEntry(d.row).then(go).catch(err=>{ alert(err.message||err); render(); });
+}
+
+/* ------------------------------------------------------------- the sidebar
+   Rebuilt on entry and on every attach edit, and on nothing else - in
+   particular NOT from the render loop: syncAudLit is the one per-frame DOM
+   write in this mode and it stays a single string compare. */
+function audBuildAttachList(){
+  const sec=document.getElementById('audAttSec');
+  const list=document.getElementById('audAttList');
+  const note=document.getElementById('audAttNote');
+  if(!sec) return;
+  const rigged = audDoc && canImport() && audDoc.rig.length>0;
+  sec.classList.toggle('hidden', !audMode);
+  list.textContent='';
+  if(!audMode) return;
+  if(!rigged){
+    note.textContent = canImport()
+      ? 'Attachments need a skeleton - add bones in Skeleton mode.'
+      : 'Only a drawing or an item can wear things.';
+    return;
+  }
+  note.textContent = attach.length ? '' : 'Drag an object here from the Library to wear it.';
+  const body = DT.curFrame(audDoc);
+  for(const a of attach){
+    const row=document.createElement('div');
+    row.className='attrow'+(a.id===audSel?' on':'');
+
+    const nm=document.createElement('div');
+    nm.className='attname'; nm.textContent=a.title||'Untitled';
+    nm.addEventListener('click',()=>{ audSel=(audSel===a.id?null:a.id); attSyncAll(); });
+    row.appendChild(nm);
+
+    const ctl=document.createElement('div'); ctl.className='attctl';
+    /* Which bone. Re-binding here rather than by a shift-drag on the canvas:
+       a hidden modifier would make every nudge near a joint a coin flip. */
+    const sel=document.createElement('select');
+    for(const b of audDoc.rig){
+      const o=document.createElement('option');
+      // the SIDE is in the label because names are not unique - a humanoid has
+      // two bones called "Hand", and a dropdown of two identical rows is useless
+      o.value=String(b.id); o.textContent=(b.name||('Bone '+b.id))+(b.side?' '+b.side:'');
+      if(b.id===DT.attachBoneId(audDoc,a)) o.selected=true;
+      sel.appendChild(o);
+    }
+    sel.addEventListener('change',e=>{ attRebind(a.id, parseInt(e.target.value,10));
+                                       e.target.blur(); });
+    ctl.appendChild(sel);
+
+    /* Depth, in the view you are LOOKING at - so you turn the character round
+       and set the back view's layering while watching it. */
+    const slot=DT.attachSlot(audDoc,a,body,audDoc.view);
+    const mk=(label,tip,fn,dis)=>{
+      const b=document.createElement('button');
+      b.className='attbtn'; b.textContent=label; b.title=tip; b.disabled=!!dis;
+      b.addEventListener('click',e=>{ fn(); e.currentTarget.blur(); });
+      ctl.appendChild(b);
+    };
+    mk('⌃','Draw in front of more of the body', ()=>attBump(a.id,1),  slot>=body.length);
+    mk('⌄','Draw behind more of the body',      ()=>attBump(a.id,-1), slot<=0);
+    mk('Auto','Layer it with the shapes on its own bone', ()=>attAuto(a.id),
+       !(a.depth && a.depth[audDoc.view]!=null));
+    mk('Detach','Take it off', ()=>attDetach(a.id));
+    row.appendChild(ctl);
+    list.appendChild(row);
+  }
+}
+
+/* ----------------------------------------------------------------- chrome */
+function audDrawAttachChrome(){
+  if(!audMode || !audDoc) return;
+  // the candidate bone, while a Library card is in flight
+  if(audDrag && audDrag.bone!=null){
+    const w=audBoneNow().get(audDrag.bone);
+    if(w){
+      const t=boneTip(w);
+      ctx.save();
+      ctx.strokeStyle='#3E9DBE'; ctx.lineWidth=5; ctx.lineCap='round';
+      ctx.globalAlpha=0.85;
+      ctx.beginPath(); ctx.moveTo(w.x,w.y); ctx.lineTo(t.x,t.y); ctx.stroke();
+      ctx.restore();
+    }
+  }
+  const a=audSel!=null?audAttachById(audSel):null;
+  if(!a) return;
+  const pl=attNow(a); if(!pl) return;
+  const c=[{x:-pl.box.w/2,y:-pl.box.h/2},{x:pl.box.w/2,y:-pl.box.h/2},
+           {x:pl.box.w/2,y:pl.box.h/2},{x:-pl.box.w/2,y:pl.box.h/2}].map(p=>attToDoc(pl,p));
+  ctx.save();
+  ctx.strokeStyle='#3E9DBE'; ctx.lineWidth=1.5; ctx.setLineDash([5,4]);
+  ctx.beginPath(); ctx.moveTo(c[0].x,c[0].y);
+  for(let i=1;i<4;i++) ctx.lineTo(c[i].x,c[i].y);
+  ctx.closePath(); ctx.stroke();
+  ctx.setLineDash([]);
+  const rh=attRotHandle(pl), sh=attSclHandle(pl);
+  ctx.beginPath(); ctx.moveTo((c[0].x+c[1].x)/2,(c[0].y+c[1].y)/2); ctx.lineTo(rh.x,rh.y); ctx.stroke();
+  ctx.fillStyle='#fff';
+  ctx.beginPath(); ctx.arc(rh.x,rh.y,5,0,TAU); ctx.fill(); ctx.stroke();
+  ctx.beginPath(); ctx.rect(sh.x-4.5,sh.y-4.5,9,9); ctx.fill(); ctx.stroke();
+  ctx.restore();
+}
+
+/* The tether from the cursor to where the thing will ACTUALLY attach - the
+   clamped projection onto the bone, not its origin. Screen space, because the
+   cursor is: it is drawn after the figure's own transform has been closed. */
+function audDrawDragTether(){
+  if(!audDrag || !audDoc) return;
+  const f=audFlip?-1:1;
+  const d2s=p=>({x:audPos.x+f*(p.x-audAnchor.x), y:audPos.y+(p.y-audAnchor.y)});
+  const c=d2s(audDrag.p);
+  ctx.save();
+  if(audDrag.bone!=null){
+    const w=audBoneNow().get(audDrag.bone);
+    if(w){
+      const t=boneTip(w), dx=t.x-w.x, dy=t.y-w.y, L2=dx*dx+dy*dy;
+      const u=L2?Math.max(0,Math.min(1,((audDrag.p.x-w.x)*dx+(audDrag.p.y-w.y)*dy)/L2)):0;
+      const anchor=d2s(boneAt(w,u));
+      ctx.strokeStyle='#3E9DBE'; ctx.lineWidth=1.5; ctx.setLineDash([4,4]);
+      ctx.beginPath(); ctx.moveTo(c.x,c.y); ctx.lineTo(anchor.x,anchor.y); ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.fillStyle='#3E9DBE';
+      ctx.beginPath(); ctx.arc(anchor.x,anchor.y,4,0,TAU); ctx.fill();
+    }
+  }
+  ctx.fillStyle= audDrag.bone!=null ? '#3E9DBE' : '#B45B4A';
+  ctx.beginPath(); ctx.arc(c.x,c.y,5,0,TAU); ctx.fill();
+  ctx.restore();
 }
 
 /* ------------------------------------------------------- the mode switch
@@ -3780,10 +4275,15 @@ function syncPalette(){
   /* Audition has no kind gate at all - it is offered on every kind - and it
      wins over both of the others, which are Draw-mode panels. */
   const aud   = paletteMode==='audition';
-  const lib   = paletteMode==='library' && onChar && !aud;
+  /* The Library is reachable from AUDITION too, and it is the one Draw-mode
+     writer deliberately left open there - a card is dragged onto a bone to
+     wear it. It needs a skeleton to hang off, so on a rigless drawing (or an
+     eye or mouth sheet, which cannot rig at all) it stays away. */
+  const audLib = audMode && onChar && rig.length>0;
+  const lib   = paletteMode==='library' && onChar;
   const bones = paletteMode==='bones'   && canRig() && !aud;
   const btn = document.getElementById('btnLibrary');
-  btn.classList.toggle('hidden', !onChar || aud);
+  btn.classList.toggle('hidden', !onChar || (audMode && !audLib));
   btn.classList.toggle('active',lib);
   syncModeBtn();
   /* Bone mode REPLACES the drawing tools, so none of them may sit there lit
@@ -3942,6 +4442,17 @@ function pruneSkin(deadIds){
     s.skin.bones=(s.skin.bones||[]).filter(b=>!dead.has(b));
     if(!s.skin.bones.length) delete s.skin;
   }
+  /* A worn object hangs off a bone, so losing that bone takes it with it - in
+     the SAME undo step, since deleteBone has already pushed one. Unlike a
+     shape, there is nothing left of it to leave standing at rest.
+
+     Tested on the RAW boneId as well as the resolved one, and that is not
+     belt-and-braces: bone names are not unique (addHumanoid makes two called
+     "Hand"), so by the time this runs - with the bone already out of `rig` -
+     attachBoneId's name fallback would resolve the dead hand's attachment onto
+     the SURVIVING hand and quietly keep it. The fallback is for a record
+     arriving from another document, never for re-homing one here. */
+  attach = attach.filter(a=>!dead.has(a.boneId) && !dead.has(DT.attachBoneId(EDOC,a)));
   bumpBind();
 }
 
@@ -6464,6 +6975,14 @@ function sceneToJSON(){
        It is also the kinder shape for a game to read. */
     bones: { rig:  JSON.parse(JSON.stringify(rig)),
              rest: JSON.parse(JSON.stringify(restPose)) },
+    /* Worn objects, ONE LIST PER DOCUMENT - deliberately beside `bones` rather
+       than inside an animation, because that is what it is: a placement on a
+       bone, not artwork in a frame. Its artwork is in `refs` above, which is
+       why usedRefKeys has to seed itself from here as well as from the shapes -
+       miss that and the save succeeds, the reload shows a character wearing
+       nothing, and it reads as this list failing to persist when it is the ART
+       that was pruned. */
+    attach: JSON.parse(JSON.stringify(attach)),
     render: {
       shading: shading,                       // 'hatch' | 'gradient'
       light: { from:{x:LIGHT_FROM.x,y:LIGHT_FROM.y}, to:{x:LIGHT_TO.x,y:LIGHT_TO.y},
@@ -6519,6 +7038,13 @@ function usedRefKeys(src){
   const walk=vs=>{ for(const n of Object.keys(vs||{})) for(const fr of vs[n]||[]) scan(fr); };
   // EVERY animation, or a reference placed only in Run is pruned out of the save
   if(src) walk(src); else eachAnimViews(walk);
+  /* ...and every WORN object, whose artwork is reached by nothing else at all -
+     an attachment is not a shape in any frame, so the walk above cannot see it.
+     Only in the no-src branch: `src` is objectSceneFrom promoting a selection,
+     and a promoted selection carries no attachments. Seeded BEFORE the queue is
+     drained, so a reference nested inside an attached item is reached too. */
+  if(!src) for(const a of attach) if(a && a.key && !seen.has(a.key)){
+                                     seen.add(a.key); queue.push(a.key); }
   while(queue.length){
     const e=refLib.get(queue.pop());
     if(!e) continue;
@@ -6585,6 +7111,14 @@ function sceneFromJSON(raw){
     s.skin.bones=(s.skin.bones||[]).filter(id=>live.has(id));
     if(!s.skin.bones.length) delete s.skin;
   }
+  /* The worn objects, and the same two sweeps: their own id namespace pushed
+     past every loaded one, and any entry whose bone this scene does not carry
+     dropped - it has nothing to hang off and would draw nowhere. attachBoneId
+     falls back to the NAME, so a record whose ids came from elsewhere survives
+     as long as a bone of that name is there. */
+  attach = Array.isArray(o.attach) ? o.attach.filter(a=>a && DT.attachBoneId(EDOC,a)!=null) : [];
+  let ma=0; for(const a of attach) if(a.id>ma) ma=a.id;
+  aid = ma+1;
   bumpBind();
 
   /* ids are only unique WITHIN a scene, so the counter has to be pushed past
@@ -6613,7 +7147,7 @@ function sceneFromJSON(raw){
   boneMode=false; boneTool='bdraw'; selBone=null; boneExtra=[]; boneGesture=null;
   /* A load is one of the few things that can move the document out from under
      an audition snapshot, so the mode goes with it. */
-  audMode=false; audDoc=null; audAnchor=null; audKeys.clear(); audClip=null;
+  audMode=false; audReset();
   restoreOnions();
   skinHideBound=false; splitCache={key:'',art:0,rig:0};
   panX=0; panY=0;
@@ -6631,8 +7165,9 @@ function newScene(kind){
   // Before setViewNames, so its pose rebuild - and its animation list - start
   // from an empty skeleton.
   rig=[]; restPose={}; bonePose=[]; anims=[]; animIdx=0; frameClip=null;
+  attach=[]; aid=1;
   bid=1; selBone=null; boneExtra=[]; boneMode=false; boneTool='bdraw';
-  audMode=false; audDoc=null; audAnchor=null; audKeys.clear(); audClip=null;
+  audMode=false; audReset();
   restoreOnions();
   skinHideBound=false; splitCache={key:'',art:0,rig:0};
   panX=0; panY=0;
@@ -7131,7 +7666,14 @@ function renderLibrary(){
       tg.textContent=rowTags(row).join(' ');
       card.appendChild(tg);
     }
-    card.addEventListener('click',()=>importRef(row).catch(err=>alert(err.message||err)));
+    /* In DRAW mode a card is a click that imports into the frame. In AUDITION
+       it is the start of a DRAG onto a bone, so the press is claimed here and
+       the click below is suppressed for the rest of that gesture. */
+    card.addEventListener('pointerdown',e=>{ if(audLibDown(e,row)) card.dataset.dragged='1'; });
+    card.addEventListener('click',()=>{
+      if(card.dataset.dragged){ delete card.dataset.dragged; return; }
+      importRef(row).catch(err=>alert(err.message||err));
+    });
     grid.appendChild(card);
   }
 }
@@ -7306,19 +7848,27 @@ function refCycles(entry, targetId){
 
 const REF_COLS='id,scene,title,kind,rev,tags,user_id,cs_users(username)';
 
-/* Bring a whole drawing in as ONE reference. There is deliberately no limit on
-   how many of these a document may hold, or on how many of the same kind. */
-async function importRef(row){
+/* Fetch a listing row's real scene and land it in refLib. Split out of
+   importRef because WEARING a drawing needs exactly this and nothing else -
+   and sharing it is what stops the new path forgetting refCycles. It writes no
+   document state, so an abandoned drag leaves only an inert refLib entry,
+   exactly as an undone import already does, and sceneToJSON prunes it. */
+async function fetchRefEntry(row){
   const c=await db();
   const {data,error}=await c.from('cs_drawings').select(REF_COLS).eq('id',row.id).single();
   if(error) throw error;
   const built=buildRefEntry(data);
   if(refCycles(built.entry, currentDrawingId))
     throw new Error('That would put this drawing inside itself.');
-
   refLib.set(built.key, built.entry);
   absorbNestedRefs(built.entry);
+  return built;
+}
 
+/* Bring a whole drawing in as ONE reference. There is deliberately no limit on
+   how many of these a document may hold, or on how many of the same kind. */
+async function importRef(row){
+  const built=await fetchRefEntry(row);
   pushUndo();
   const r=cv.getBoundingClientRect();
   // a quarter of the stage at most, and never blown up past its authored size
@@ -7392,7 +7942,8 @@ document.getElementById('animSkel').addEventListener('change',e=>{
 
 document.getElementById('btnLibrary').addEventListener('click',()=>{
   if(!canImport()) return;
-  paletteMode = paletteMode==='library' ? 'paint' : 'library';
+  // ...and back to whichever sidebar owns the mode we are standing in
+  paletteMode = paletteMode==='library' ? (audMode?'audition':'paint') : 'library';
   syncPalette();
   if(paletteMode==='library'){
     refreshLibrary();
@@ -8141,10 +8692,35 @@ window.addEventListener('keydown',e=>{
     // ...but a text field keeps its own clipboard, or Ctrl+V in the library
     // search box pastes a shape onto the canvas instead of text into the box.
     if(e.target.tagName==='INPUT' && (k==='c'||k==='v'||k==='x'||k==='a')) return;
-    /* Z, Y, C, V and D all EDIT, and audition is driving a snapshot taken on
-       the way in - an undo behind its back would leave the two disagreeing
-       until the mode was next entered. Ctrl+S is not an edit and stays live. */
-    if(audMode && k!=='s') return;
+    /* C, V and D all edit the BODY, and audition is driving a snapshot of it
+       taken on the way in - an edit behind its back would leave the two
+       disagreeing until the mode was next entered. Ctrl+S is not an edit and
+       stays live.
+
+       Z and Y are the exception, because attaching IS an edit made in here and
+       the top bar that carries Undo is hidden - so Ctrl+Z has to reach it. It
+       is latched at the depth the mode was entered at: stepping below that
+       would undo a body edit and leave the snapshot stale, which is the one
+       failure this mode is built to make impossible. */
+    if(audMode){
+      if(k==='z' && !e.shiftKey){
+        e.preventDefault();
+        if(undoStack.length>audUndoDepth){ undo(); attSyncAll(); }
+        return;
+      }
+      if(k==='y' || (k==='z' && e.shiftKey)){
+        e.preventDefault();
+        /* ...and symmetrically: only a step this visit put on the redo stack.
+           The latch has to be CLAMPED first, because a fresh edit clears the
+           redo stack outright - so the entry depth can be left standing above
+           a stack that no longer has anything in it, and a stale one would
+           block redo for the rest of the visit. */
+        audRedoDepth=Math.min(audRedoDepth, redoStack.length);
+        if(redoStack.length>audRedoDepth){ redo(); attSyncAll(); }
+        return;
+      }
+      if(k!=='s') return;
+    }
     if(k==='z'){ e.preventDefault(); e.shiftKey?redo():undo(); }
     else if(k==='y'){ e.preventDefault(); redo(); }
     else if(k==='c'){ e.preventDefault(); if(!boneMode) copySelected(); }
@@ -8171,7 +8747,13 @@ window.addEventListener('keydown',e=>{
      binding was removed. WASD and the arrows are the only live keys, plus
      Escape, which is the keyboard's way back; the menu is the other. */
   if(audMode){
-    if(e.key==='Escape'){ setMode('draw'); return; }
+    /* Escape clears a selection FIRST and only leaves on a second press -
+       otherwise there is no way to deselect a worn object at all. */
+    if(e.key==='Escape'){ if(audSel!=null){ audSel=null; attSyncAll(); } else setMode('draw');
+                          return; }
+    if((e.key==='Delete'||e.key==='Backspace') && audSel!=null){
+      attDetach(audSel); e.preventDefault(); return;
+    }
     const d=AUD_KEYS[k];
     if(d){ audKeys.add(d); e.preventDefault(); }   // preventDefault: arrows scroll
     return;

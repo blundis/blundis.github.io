@@ -27,7 +27,7 @@
 
   /* Stamped so a test can tell a reloaded page from a cached one - `-c-1`
      disables caching, but a stale dt.js reads as a baffling failure. */
-  DT.BUILD = '1.10.0';
+  DT.BUILD = '1.11.0';
 
   /* ------------------------------------------------------------- constants */
   const TAU = Math.PI * 2;
@@ -312,6 +312,13 @@
       // rig. The hierarchy is one per document, the rest is per VIEW, and the
       // pose is one delta per FRAME of the current animation.
       rig: [], restPose: {}, bonePose: [],
+      /* Worn objects. One list per DOCUMENT - not per frame and not per
+         animation: a sword stays in the hand through Idle, Walk and Attack
+         alike, which is the whole difference between this and a `ref` shape.
+         Each entry names a bone and carries a placement in that bone's own
+         local frame, so front and back agree for free - the rig is one per
+         document and only the REST is per view. */
+      attach: [],
       // imported drawings, keyed `drawingId@rev`
       refLib: new Map(),
       // the only three render settings a document actually varies
@@ -716,7 +723,7 @@
      function plus SCENE_VERSION is what stops them drifting. */
 
   const SCENE_FORMAT = 'charactersmith.scene';
-  const SCENE_VERSION = 6;   // v6 made a document hold MANY named animations
+  const SCENE_VERSION = 7;   // v7 gave a document a list of worn ATTACHMENTS
   const FPS = 12;
 
   const DOC_KINDS = {
@@ -867,6 +874,13 @@
       if (o.bones) delete o.bones.pose;
       o.version = 6;
     }
+    if (o.version < 7) {
+      /* v7 gave a document a list of worn ATTACHMENTS. Nothing to fold - a v6
+         drawing wears nothing - so this is the v3->v4 `bones` step again: seed
+         it and move on. */
+      o.attach = [];
+      o.version = 7;
+    }
     return o;
   }
 
@@ -949,6 +963,7 @@
       views: anims[ai].views, bonePose: anims[ai].pose,
       view: viewNames[0], frame: 0,
       rig: rig, restPose: restPose, refLib: refLib,
+      attach: (o.attach || []).map(a => Object.assign({}, a)),
       shading: r.shading === 'gradient' ? 'gradient' : 'hatch',
       lightFrom: light.from || LIGHT_FROM,
       lightTo: light.to || LIGHT_TO,
@@ -966,7 +981,127 @@
               s.skin.bones = s.skin.bones.filter(id => rigIds.has(id));
               if (!s.skin.bones.length) delete s.skin;
             }
+    /* ...and the same for an attachment: one whose bone resolves to nothing has
+       no frame to be placed in and would throw at draw time. attachBoneId falls
+       back to the NAME, so a scene whose ids came from elsewhere still lands. */
+    doc.attach = doc.attach.filter(a => attachBoneId(doc, a) != null);
     return doc;
+  }
+
+  /* Which bone an attachment is on. The id is the authority - the rig is one
+     per document, so an id already means the same bone in every view, and that
+     is what makes front and back agree with nothing to keep in step. The NAME
+     is only a fallback for a record whose ids came from another document:
+     addBone names bones 'Bone '+(rig.length+1), so names are NOT unique and
+     must never be the primary key. */
+  function attachBoneId(doc, a) {
+    if (!a) return null;
+    if (a.boneId != null && boneById(doc, a.boneId)) return a.boneId;
+    if (a.bone) for (const b of doc.rig) if (b.name === a.bone) return b.id;
+    return null;
+  }
+
+  /* An attachment's placement, composed into the world values drawShape wants.
+     The position line is boneWorld's own child-origin line: an attachment is
+     placed exactly the way the engine places a child bone.
+
+     `m` is the MIRROR SENSE, and it is per BONE rather than per view - which is
+     what makes a partially flipped rig come out right. A drawing whose back
+     view is hand-authored may have had only its arms flipped (so that left is
+     still left, on the other side of the body); then a sword on a flipped hand
+     mirrors and a helmet on the unflipped head does not, with nothing to set.
+     It is a DIFFERENCE of two senses because either view may carry a
+     reflection - flipBone works in the front as well - so an attachment
+     authored in a mirrored view must not be mirrored back in the other one.
+
+     mirOf, never sgnX: mirOf is mx*my, the determinant, i.e. the handedness.
+     mx=-1,my=-1 is a 180 degree ROTATION and not a reflection, and mirOf
+     correctly reads +1 there where sgnX would wrongly mirror the artwork.
+
+     ...and the mirror is SY, not SX. A reflection in the bone's local frame is
+     diag(1,-1), and J.T(t,off).R(rot).S(s,s) = T(t,-off).R(-rot).S(s,-s).
+     Negating sx instead is a DIFFERENT map, because diag(1,-1) = R(pi).diag(-1,1)
+     - it is this reflection plus a half turn, so the blade would point back up
+     the forearm. */
+  function attachXform(doc, a, W, v) {
+    const id = attachBoneId(doc, a);
+    if (id == null) return null;
+    const w = W.get(id);
+    if (!w) return null;
+    const m = mirOf(restBone(doc, id, v)) * mirOf(restBone(doc, id, a.av || v));
+    const c = Math.cos(w.rot), n = Math.sin(w.rot);
+    const t = (a.att || 0) * w.len, o = m * (a.off || 0);
+    const s = a.scale || 1;
+    return { x: w.x + c * t - n * o, y: w.y + n * t + c * o,
+             rot: w.rot + m * (a.rot || 0), sx: s, sy: m * s, bone: id, w: w, m: m };
+  }
+
+  /* The inverse: a world point and a world angle back into the bone's frame.
+     This is addBone's own resolve, read forwards. */
+  function attachInvert(w, p, phi) {
+    const dx = p.x - w.x, dy = p.y - w.y;
+    const c = Math.cos(w.rot), n = Math.sin(w.rot);
+    return { att: w.len > 1e-4 ? (dx * c + dy * n) / w.len : 0,   // klen can shrink a bone
+             off: -dx * n + dy * c,
+             rot: (phi || 0) - w.rot };
+  }
+
+  /* The throwaway `ref` shape an attachment is drawn through. posedPlacement
+     returns a shape unchanged when it carries no `skin` (see above), so putting
+     the already-composed world values straight in x/y/rot/sx/sy passes through
+     untouched - and drawRefShape never reads pts, so the placement box is not
+     needed. Reusing that one painter is what buys `follow`, nested references
+     and REF_MAX_DEPTH here for nothing. */
+  function attachShape(a, pl) {
+    return { pts: [], x: pl.x, y: pl.y, rot: pl.rot, sx: pl.sx, sy: pl.sy,
+             lw: 0, closed: true, colors: { outline: NONE, fill: NONE, shadow: NONE },
+             ref: { key: a.key, drawingId: a.drawingId, rev: a.rev, kind: a.kind,
+                    title: a.title, frame: a.frame || 0, follow: !!a.follow } };
+  }
+
+  /* Where an attachment sits in the body's draw order, as an index INTO that
+     frame's shape list. The body is one flat list drawn in array order and the
+     back view is hand-authored, so the correct layering for it already exists
+     in that list - an attachment takes a slot in it rather than being stacked
+     on top, which is what stops a sword drawing in front of the whole body.
+
+     Auto is "after the last shape skinned to this bone": a sword in the near
+     hand lands with the near hand, in whichever view. That depends on skinning,
+     which is per frame - in the documented workflow (rig and bind at frame 0,
+     then Duplicate Frame) it carries forward for free, and a frame with no skin
+     at all falls back to in front of everything, which is never worse than the
+     old behaviour. An explicit per-VIEW override wins over both. */
+  function attachSlot(doc, a, body, v) {
+    const d = (a.depth || {})[v];
+    if (d != null) return Math.max(0, Math.min(body.length, d | 0));
+    const id = attachBoneId(doc, a);
+    if (id != null)
+      for (let i = body.length - 1; i >= 0; i--) {
+        const s = body[i];
+        if (s && s.skin && s.skin.bones && s.skin.bones.indexOf(id) >= 0) return i + 1;
+      }
+    return body.length;
+  }
+
+  /* One interleaved walk in place of drawFrameShapes, which is itself only a
+     loop over drawShape - so nothing is bypassed, and a document wearing
+     nothing takes the plain call and costs exactly what it always did. */
+  function drawFrameWithAttach(g, doc, body, opts) {
+    const at = doc.attach || [];
+    if (!at.length) { drawFrameShapes(g, doc, body, opts); return; }
+    const v = (opts && opts.pview) || doc.view;
+    const f = (opts && opts.pframe != null) ? opts.pframe : doc.frame;
+    const W = boneWorld(doc, f < 0 ? {} : poseAt(doc, f), v);
+    const slots = at.map((a, i) => ({ a: a, i: i, slot: attachSlot(doc, a, body, v) }))
+                    .sort((p, q) => (p.slot - q.slot) || (p.i - q.i));   // stable
+    let k = 0;
+    for (let i = 0; i <= body.length; i++) {
+      while (k < slots.length && slots[k].slot === i) {
+        const a = slots[k++].a, pl = attachXform(doc, a, W, v);
+        if (pl) drawRefShape(g, doc, attachShape(a, pl), opts);
+      }
+      if (i < body.length) drawShape(g, doc, body[i], opts);
+    }
   }
 
   /* Switch which animation a Doc is standing in. `views` and `bonePose` ARE the
@@ -1027,6 +1162,8 @@
     HATCH_GAP, HATCH_WEIGHT, REF_MAX_DEPTH, paint,
     fillStyleFor, hatchShade, refFrames, refFrameIndex,
     drawShape, drawRefShape, drawFrameShapes,
+    attachBoneId, attachXform, attachInvert, attachShape, attachSlot,
+    drawFrameWithAttach,
     SCENE_FORMAT, SCENE_VERSION, FPS, DOC_KINDS, STD_ANIMS,
     migrateScene, migrateRefEntry, migrateRefField,
     docFromScene, instanceOf, setAnim, setAnimByName, animIndexByName,
